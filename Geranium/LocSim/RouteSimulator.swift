@@ -323,7 +323,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard n >= 2 else { return [0] }
         let middle = Array(1...(n - 2))
         let skip = min(max(skipProbability, 0), 1)
-        let modeAt: (Int) -> Bool = { $0 < waypointModes.count && waypointModes[$0] }
+        let modes = waypointModes
+        let modeAt: (Int) -> Bool = { $0 < modes.count && modes[$0] }
 
         var out: [Int] = [0]
         let loopCount = max(1, loops)
