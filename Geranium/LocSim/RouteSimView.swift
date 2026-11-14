@@ -1014,7 +1014,7 @@ struct RouteSimSheet: View {
 
     private func applyModeSpeedDefaults(_ mode: TravelMode) {
         switch mode {
-        case .walking: speedMinKmh = 4.5; speedMaxKmh = 6.0
+        case .walking: speedMinKmh = 3.5; speedMaxKmh = 4.5   // 老总真实漫步实测: 3.7km/h(16'08/km) 步频58
         case .cycling: speedMinKmh = 15.0; speedMaxKmh = 25.0
         case .driving: speedMinKmh = 30.0; speedMaxKmh = 60.0
         }

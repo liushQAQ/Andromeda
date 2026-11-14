@@ -561,7 +561,6 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let d = distanceBetween(from, to)
         guard d > 0 else { return [from, to] }
         let amp = min(d * 0.06, 30.0)
-        let waves = Double(max(2, min(4, Int(d / 300) + 2)))
         let steps = max(8, Int(d / 15))
         let latScale = 111320.0
         let lonScale = 111320.0 * cos(from.latitude * Double.pi / 180)
@@ -569,16 +568,25 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let dy = (to.latitude - from.latitude) * latScale
         let ux = dx / d, uy = dy / d
         let px = -uy, py = ux
-        let side = Bool.random() ? 1.0 : -1.0
-        var out: [CLLocationCoordinate2D] = []
-        for s in 0...steps {
-            let t = Double(s) / Double(steps)
-            let perp = side * amp * sin(.pi * waves * t)
+        // 有机绕行（按老总真实轨迹图调形态）：沿走向随机放 2~4 个摆动点，
+        // 垂直偏移 ±(0.35~1)×amp、随机方向，点间由 smoothPolyline 平滑——
+        // 比规则正弦更像真实步行轨迹（自然摆动、可出现小幅回头）。
+        var out: [CLLocationCoordinate2D] = [CLLocationCoordinate2D(latitude: from.latitude, longitude: from.longitude)]
+        let wobbleCount = Int.random(in: 2...4)
+        var lastT = 0.0
+        var lastSide = Bool.random() ? 1.0 : -1.0
+        for _ in 0..<wobbleCount {
+            let t = lastT + Double.random(in: 0.15...0.3)
+            if t >= 0.92 { break }
+            lastT = t
+            lastSide = -lastSide
+            let perp = lastSide * Double.random(in: 0.35...1.0) * amp
             let x = dx * t + px * perp
             let y = dy * t + py * perp
             out.append(CLLocationCoordinate2D(latitude: from.latitude + y / latScale,
                                               longitude: from.longitude + x / lonScale))
         }
+        out.append(CLLocationCoordinate2D(latitude: to.latitude, longitude: to.longitude))
         return out
     }
 
