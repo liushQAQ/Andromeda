@@ -57,17 +57,6 @@ struct LocSimView: View {
                     }
                     .onChange(of: tappedCoordinate) { newCoord in
                         guard let coord = newCoord else { return }
-                        // DriftFix v2: 路线页开启「地图选点」时，点地图=添加途经点（不再立即模拟）
-                        if routeSimulator.pickingOnMap {
-                            routeSimulator.addPickedWaypoint(coord.coordinate)
-                            AlertKitAPI.present(
-                                title: "📍 途经点 \(routeSimulator.userWaypoints.count)",
-                                icon: .done,
-                                style: .iOS17AppleMusic,
-                                haptic: .success
-                            )
-                            return
-                        }
                         let altitudeValue = Double(altitude) ?? 0.0
                         startSimulation(at: coord.coordinate, altitude: altitudeValue)
                     }

@@ -20,6 +20,13 @@ struct RouteSimSheet: View {
     @State private var endResults: [MKMapItem] = []
     @State private var activeField: ActiveField = .none
     @State private var routeReady: Bool = false
+    @State private var wptText: String = ""
+    @State private var isSearchingWpt: Bool = false
+    @State private var wptResults: [MKMapItem] = []
+    @State private var showMapPicker: Bool = false
+    @State private var pickerTapped: EquatableCoordinate? = nil
+    @State private var pickerPending: EquatableCoordinate? = nil
+    @State private var pickerRegion: MKCoordinateRegion? = nil
     @State private var speedMultiplier: Double = 1.0
     @State private var showGPXPicker: Bool = false
     @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
@@ -40,10 +47,11 @@ struct RouteSimSheet: View {
     }
     
     enum ActiveField {
-        case none, start, end
+        case none, start, end, waypoint
     }
     
     var body: some View {
+        ZStack {
         NavigationView {
             ScrollView {
                 VStack(spacing: 16) {
@@ -80,7 +88,10 @@ struct RouteSimSheet: View {
                             field: .end
                         )
 
-                        // MARK: - DriftFix v2 途经点（数量不限，地图选点/搜索均可）
+                        // MARK: - DriftFix v2.1 添加途径点（搜索 / 地图选点，按添加顺序生效）
+                        addWaypointCard
+
+                        // MARK: - DriftFix v2 途经点列表
                         waypointsSection
 
                         // MARK: - DriftFix v2 线路模式
@@ -289,15 +300,17 @@ struct RouteSimSheet: View {
                     }
                 }
             }
-            .onDisappear {
-                routeSimulator.pickingOnMap = false
-            }
             .onAppear {
                 refreshSavedRoutes()
             }
             .sheet(item: $shareItem) { item in
                 ActivityShareSheet(items: [item.url])
             }
+        }
+
+        if showMapPicker {
+            mapPickerOverlay
+        }
         }
     }
 
@@ -343,13 +356,102 @@ struct RouteSimSheet: View {
         }
     }
 
-    // MARK: - DriftFix v2 途经点管理
+    // MARK: - DriftFix v2.1 添加途径点卡片（搜索 + 地图选点弹层）
+    private var addWaypointCard: some View {
+        VStack(spacing: 8) {
+            locationCard(
+                title: "Add Waypoint 添加途径点",
+                icon: "mappin.circle.fill",
+                iconColor: .blue,
+                text: $wptText,
+                isSearching: isSearchingWpt,
+                results: wptResults,
+                selectedCoord: nil,
+                field: .waypoint
+            )
+            Button(action: { showMapPicker = true }) {
+                HStack {
+                    Image(systemName: "map.fill")
+                    Text("在地图上选点添加")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.blue.opacity(0.15))
+                )
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 4)
+        }
+    }
+
+    // MARK: - DriftFix v2.1 地图选点弹层（在路线页内完成，不切出去）
+    private var mapPickerOverlay: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("取消") {
+                    showMapPicker = false
+                    pickerPending = nil
+                }
+                .foregroundColor(.red)
+                Spacer()
+                Text("点地图选途径点")
+                    .font(.headline)
+                Spacer()
+                Button(action: confirmPick) {
+                    Text("确认添加")
+                        .fontWeight(.semibold)
+                }
+                .disabled(pickerPending == nil)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            CustomMapView(
+                tappedCoordinate: $pickerTapped,
+                moveToRegion: $pickerRegion
+            )
+            .frame(maxHeight: .infinity)
+            .cornerRadius(12)
+            .padding(.horizontal, 12)
+
+            HStack(spacing: 6) {
+                if let p = pickerPending {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundColor(.green)
+                    Text(String(format: "%.5f, %.5f", p.coordinate.latitude, p.coordinate.longitude))
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                } else {
+                    Text("在上方地图任意位置点一下")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.vertical, 10)
+        }
+        .background(Color(UIColor.systemBackground).ignoresSafeArea())
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .zIndex(10)
+    }
+
+    private func confirmPick() {
+        guard let picked = pickerPending else { return }
+        routeSimulator.addPickedWaypoint(picked.coordinate)
+        pickerPending = nil
+        showMapPicker = false
+        routeReady = false
+        AlertKitAPI.present(title: "📍 途径点已添加", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
+    // MARK: - DriftFix v2 途经点列表（起点/途径1..N/终点 全序列，可逐条删）
     private var waypointsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: "mappin.and.ellipse")
+                Image(systemName: "list.number")
                     .foregroundColor(.accentColor)
-                Text("Waypoints 途经点")
+                Text("Route Points 点序列")
                     .font(.headline)
                 Spacer()
                 Text("\(routeSimulator.userWaypoints.count) pts")
@@ -358,31 +460,21 @@ struct RouteSimSheet: View {
             }
             .padding(.horizontal)
 
-            Button(action: { routeSimulator.pickingOnMap.toggle() }) {
-                HStack {
-                    Image(systemName: routeSimulator.pickingOnMap ? "checkmark.circle.fill" : "hand.tap")
-                    Text(routeSimulator.pickingOnMap
-                         ? "地图选点：开——点地图任意位置即添加途经点"
-                         : "地图选点：关（当前点地图=立即模拟）")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(routeSimulator.pickingOnMap ?
-                              Color.green.opacity(0.18) :
-                              Color(UIColor.secondarySystemBackground))
-                )
-            }
-            .padding(.horizontal)
-
-            if routeSimulator.userWaypoints.count > 2 {
-                ForEach(1..<(routeSimulator.userWaypoints.count - 1), id: \.self) { idx in
-                    HStack {
-                        Image(systemName: "mappin")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text("途经点 \(idx)")
+            if routeSimulator.userWaypoints.isEmpty {
+                Text("还没有点：先设起终点（搜索/地图），再用上方卡片加途径点。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+            } else {
+                let last = routeSimulator.userWaypoints.count - 1
+                ForEach(routeSimulator.userWaypoints.indices, id: \.self) { idx in
+                    let isStart = idx == 0
+                    let isEnd = idx == last
+                    HStack(spacing: 8) {
+                        Image(systemName: isStart ? "play.fill" : (isEnd ? "flag.checkered.fill" : "mappin"))
+                            .font(.caption)
+                            .foregroundColor(isStart ? .green : (isEnd ? .red : .blue))
+                        Text(isStart ? "起点" : (isEnd ? "终点" : "途经点 \(idx)"))
                             .font(.subheadline)
                         Spacer()
                         Text(String(format: "%.4f, %.4f",
@@ -707,24 +799,27 @@ struct RouteSimSheet: View {
     // MARK: - Actions
     private func searchLocation(query: String, field: ActiveField) {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        
+
         activeField = field
-        
+
         if field == .start { isSearchingStart = true }
-        else { isSearchingEnd = true }
-        
+        else if field == .end { isSearchingEnd = true }
+        else { isSearchingWpt = true }
+
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
-        
+
         let search = MKLocalSearch(request: request)
         search.start { response, error in
             DispatchQueue.main.async {
                 if field == .start { isSearchingStart = false }
-                else { isSearchingEnd = false }
-                
+                else if field == .end { isSearchingEnd = false }
+                else { isSearchingWpt = false }
+
                 if let items = response?.mapItems {
                     if field == .start { startResults = items }
-                    else { endResults = items }
+                    else if field == .end { endResults = items }
+                    else { wptResults = items }
                 }
             }
         }
@@ -737,10 +832,15 @@ struct RouteSimSheet: View {
             routeSimulator.setStart(coord)
             startText = item.name ?? "Selected"
             startResults = []
-        } else {
+        } else if field == .end {
             routeSimulator.setEnd(coord)
             endText = item.name ?? "Selected"
             endResults = []
+        } else {
+            routeSimulator.addPickedWaypoint(coord)
+            wptText = ""
+            wptResults = []
+            AlertKitAPI.present(title: "📍 途径点已添加", icon: .done, style: .iOS17AppleMusic, haptic: .success)
         }
 
         activeField = .none

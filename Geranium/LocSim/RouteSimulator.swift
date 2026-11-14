@@ -97,7 +97,6 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     //    链式算路拼接，每个用户指定的点都是一段的精确起终点。
     @Published var routeMode: RouteMode = .road
     @Published var userWaypoints: [CLLocationCoordinate2D] = []   // 用户点列(GCJ 显示系)，顺序=起→途经→终
-    @Published var pickingOnMap: Bool = false                     // 「地图选点添加途经点」开关（LocSimView 据此改写点按行为）
     
     private var routePoints: [CLLocationCoordinate2D] = []
     private var timer: Timer? = nil
