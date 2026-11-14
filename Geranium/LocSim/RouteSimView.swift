@@ -444,17 +444,6 @@ struct RouteSimSheet: View {
         .padding(.horizontal)
     }
 
-            Text("途经点行可单独切换 顺序/随机；每次 Calculate 重新随机组合。跳过只作用于「随机」点，固定点保持按序必到。")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
-        }
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
-        .padding(.horizontal)
-    }
-
     private var routeModeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("线路模式")
