@@ -330,6 +330,82 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         LocSimManager.startLocSim(location: location)
     }
     
+    // MARK: - DriftFix 线路保存/加载
+    // 存的是"实际注入序列"（WGS-84 真坐标）写成标准 GPX 落盘到 Documents/AndromedaRoutes/：
+    // 重放时直接把 GPX 点列作为 routePoints（polylineIsWGS=true 直注），不再依赖基准判定；
+    // 文件在 Files App 可见，可导出备份，也可走原有 GPX 导入按钮重灌。
+    static func routesDirectory() -> URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AndromedaRoutes", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func listSavedRoutes() -> [URL] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: routesDirectory(), includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension.lowercased() == "gpx" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    private static func xmlEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    /// 保存当前已算好的路线（routePoints 换算成实际注入的 WGS 序列）。
+    func saveCurrentRoute(named rawName: String) -> Bool {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, routePoints.count >= 2 else { return false }
+        let wgsPoints = routePoints.map { polylineIsWGS ? $0 : CoordTransform.gcj02ToWgs84($0) }
+        var gpx = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        gpx += "<gpx version=\"1.1\" creator=\"Andromeda DriftFix\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
+        gpx += "<trk><name>\(Self.xmlEscape(name))</name><trkseg>\n"
+        for p in wgsPoints {
+            gpx += String(format: "<trkpt lat=\"%.7f\" lon=\"%.7f\"/>\n", p.latitude, p.longitude)
+        }
+        gpx += "</trkseg></trk>\n</gpx>\n"
+        let safe = name
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: "?", with: "_")
+        let url = Self.routesDirectory().appendingPathComponent("\(safe).gpx")
+        do {
+            try gpx.write(to: url, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 加载已存线路：GPX 点列（WGS）直接作为注入序列，显示线转 GCJ。
+    func loadSavedRoute(at url: URL) -> Bool {
+        guard let result = GPXParser.parse(url: url), !result.isEmpty else { return false }
+        let coords = result.allCoordinates
+        guard coords.count >= 2 else { return false }
+
+        timer?.invalidate()
+        timer = nil
+        polylineIsWGS = true            // 存档即 WGS 真坐标，注入直用
+        routePoints = coords
+        totalPoints = coords.count
+        currentPointIndex = 0
+        progress = 0.0
+        isSimulating = false
+        isPaused = false
+        currentPosition = nil
+        allRoutePolylines = []
+        availableRoutes = []
+        routePolyline = CoordTransform.displayPolyline(
+            MKPolyline(coordinates: coords, count: coords.count)
+        )
+        let secs = Double(coords.count) * updateInterval
+        let minutes = Int(secs) / 60
+        estimatedTime = minutes > 60 ? "\(minutes/60)h \(minutes%60)m" : "\(minutes)m \(Int(secs) % 60)s"
+        return true
+    }
+
     // MARK: - Background Task Management
     private func startBackgroundTask() {
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "RouteSimulation") { [weak self] in

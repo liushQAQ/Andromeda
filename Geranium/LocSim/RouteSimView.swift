@@ -23,6 +23,7 @@ struct RouteSimSheet: View {
     @State private var routeReady: Bool = false
     @State private var speedMultiplier: Double = 1.0
     @State private var showGPXPicker: Bool = false
+    @State private var savedRoutes: [URL] = RouteSimulator.listSavedRoutes()
     
     enum ActiveField {
         case none, start, end
@@ -161,29 +162,52 @@ struct RouteSimSheet: View {
                                         .foregroundColor(.secondary)
                                 }
                                 .padding(.horizontal)
-                                
+
                                 ForEach(Array(routeSimulator.availableRoutes.enumerated()), id: \.element.id) { idx, option in
                                     routeOptionCard(option: option, index: idx)
                                 }
-                                
-                                // Start button
-                                Button(action: startRoute) {
-                                    HStack {
-                                        Image(systemName: "play.fill")
-                                        Text("Start Route Simulation")
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 14)
-                                            .fill(Color.green)
-                                    )
-                                    .foregroundColor(.white)
-                                    .font(.headline)
-                                }
-                                .padding(.horizontal)
                             }
                         }
+
+                        // MARK: - Start / Save（算路或从存档加载后可用）
+                        if routeReady {
+                            // Start button
+                            Button(action: startRoute) {
+                                HStack {
+                                    Image(systemName: "play.fill")
+                                    Text("Start Route Simulation")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(Color.green)
+                                )
+                                .foregroundColor(.white)
+                                .font(.headline)
+                            }
+                            .padding(.horizontal)
+
+                            // DriftFix: 保存线路（存"实际注入序列"为 GPX，可重放可导出）
+                            Button(action: saveCurrentRoute) {
+                                HStack {
+                                    Image(systemName: "square.and.arrow.down.fill")
+                                    Text("Save Route")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(Color.indigo.opacity(0.9))
+                                )
+                                .foregroundColor(.white)
+                                .font(.headline)
+                            }
+                            .padding(.horizontal)
+                        }
+
+                        // MARK: - Saved Routes (DriftFix)
+                        savedRoutesSection
                     }
                 }
                 .padding(.vertical)
@@ -607,6 +631,83 @@ struct RouteSimSheet: View {
             let rect = selectedPolyline.boundingMapRect
             let region = MKCoordinateRegion(rect.insetBy(dx: -rect.size.width * 0.2, dy: -rect.size.height * 0.2))
             mapRegion = region
+        }
+    }
+
+    // MARK: - Saved Routes (DriftFix)
+    private var savedRoutesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "tray.full.fill")
+                    .foregroundColor(.accentColor)
+                Text("Saved Routes")
+                    .font(.headline)
+                Spacer()
+                Button(action: { savedRoutes = RouteSimulator.listSavedRoutes() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundColor(.accentColor)
+                }
+            }
+            .padding(.horizontal)
+
+            if savedRoutes.isEmpty {
+                Text("No saved routes. Calculate a route then tap Save Route.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+            } else {
+                ForEach(savedRoutes, id: \.self) { url in
+                    Button(action: { loadSavedRoute(url) }) {
+                        HStack {
+                            Image(systemName: "figure.walk.circle.fill")
+                                .foregroundColor(.green)
+                            Text(url.deletingPathExtension().lastPathComponent)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
+                    Divider().padding(.leading, 44)
+                }
+            }
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
+    private func saveCurrentRoute() {
+        UIApplication.shared.TextFieldAlert(
+            title: "Route Name",
+            textFieldPlaceHolder: "Example: Morning Run"
+        ) { text, _ in
+            guard let name = text, !name.isEmpty else { return }
+            if routeSimulator.saveCurrentRoute(named: name) {
+                savedRoutes = RouteSimulator.listSavedRoutes()
+                AlertKitAPI.present(title: "Saved!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+            } else {
+                UIApplication.shared.alert(body: "Nothing to save (no route loaded).")
+            }
+        }
+    }
+
+    private func loadSavedRoute(_ url: URL) {
+        if routeSimulator.loadSavedRoute(at: url) {
+            routeReady = true
+            if let poly = routeSimulator.routePolyline {
+                let rect = poly.boundingMapRect
+                mapRegion = MKCoordinateRegion(rect.insetBy(dx: -rect.size.width * 0.2, dy: -rect.size.height * 0.2))
+            }
+            AlertKitAPI.present(title: "Loaded!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        } else {
+            UIApplication.shared.alert(body: "Failed to load route file.")
         }
     }
     
