@@ -14,6 +14,8 @@ struct RouteSimSheet: View {
     @State private var startText: String = ""
     @State private var endText: String = ""
     @State private var selectedMode: TravelMode = .driving
+    @State private var speedMinKmh: Double = 30.0
+    @State private var speedMaxKmh: Double = 60.0
     @State private var isSearchingStart: Bool = false
     @State private var isSearchingEnd: Bool = false
     @State private var startResults: [MKMapItem] = []
@@ -107,6 +109,7 @@ struct RouteSimSheet: View {
                                 ForEach(TravelMode.allCases, id: \.self) { mode in
                                     Button(action: {
                                         selectedMode = mode
+                                        applyModeSpeedDefaults(mode)
                                         routeReady = false
                                     }) {
                                         VStack(spacing: 4) {
@@ -135,23 +138,46 @@ struct RouteSimSheet: View {
                             .padding(.horizontal)
                         }
                         
-                        // MARK: - Speed Multiplier
+                        // MARK: - DriftFix v2.2 速度区间（区间内随机游走，杜绝匀速）
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("Speed")
+                                Text("Speed 速度区间")
                                     .font(.headline)
                                 Spacer()
-                                Text("\(String(format: "%.1f", speedMultiplier))x (\(formattedSpeed))")
+                                Text(String(format: "%.1f ~ %.1f km/h", speedMinKmh, speedMaxKmh))
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                             }
                             .padding(.horizontal)
-                            
-                            Slider(value: $speedMultiplier, in: 0.5...10.0, step: 0.5)
+
+                            HStack {
+                                Text("最低")
+                                    .font(.caption)
+                                    .frame(width: 34)
+                                Slider(value: $speedMinKmh, in: 0.5...120, step: 0.5)
+                                    .onChange(of: speedMinKmh) { v in
+                                        if v > speedMaxKmh { speedMaxKmh = v }
+                                        routeReady = false
+                                    }
+                            }
+                            .padding(.horizontal)
+
+                            HStack {
+                                Text("最高")
+                                    .font(.caption)
+                                    .frame(width: 34)
+                                Slider(value: $speedMaxKmh, in: 0.5...120, step: 0.5)
+                                    .onChange(of: speedMaxKmh) { v in
+                                        if v < speedMinKmh { speedMinKmh = v }
+                                        routeReady = false
+                                    }
+                            }
+                            .padding(.horizontal)
+
+                            Text("实际速度在区间内每秒慢速随机变化（不是匀速机器人）；平均配速 \(paceText())")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                                 .padding(.horizontal)
-                                .onChange(of: speedMultiplier) { _ in
-                                    routeReady = false
-                                }
                         }
                         
                         // MARK: - Calculate Button
@@ -559,15 +585,12 @@ struct RouteSimSheet: View {
                         .foregroundColor(.secondary)
                     }
                     
-                    // Simulated ETA with speed multiplier
-                    if speedMultiplier != 1.0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "speedometer")
-                                .font(.caption2)
-                            Text("At \(String(format: "%.1f", speedMultiplier))x: \(routeSimulator.estimatedTime)")
-                                .font(.caption)
-                                .foregroundColor(.accentColor)
-                        }
+                    HStack(spacing: 4) {
+                        Image(systemName: "speedometer")
+                            .font(.caption2)
+                        Text("ETA: \(routeSimulator.estimatedTime)")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
                     }
                 }
                 
@@ -790,10 +813,19 @@ struct RouteSimSheet: View {
     }
     
     // MARK: - Computed
-    private var formattedSpeed: String {
-        let baseSpeed = selectedMode.speed * speedMultiplier
-        let kmh = baseSpeed * 3.6
-        return "\(Int(kmh)) km/h"
+    private func paceText() -> String {
+        let avg = (speedMinKmh + speedMaxKmh) / 2
+        guard avg > 0.2 else { return "—" }
+        let totalSec = 3600 / avg
+        return String(format: "%d'%02d\"/km", Int(totalSec / 60), Int(totalSec) % 60)
+    }
+
+    private func applyModeSpeedDefaults(_ mode: TravelMode) {
+        switch mode {
+        case .walking: speedMinKmh = 4.5; speedMaxKmh = 6.0
+        case .cycling: speedMinKmh = 15.0; speedMaxKmh = 25.0
+        case .driving: speedMinKmh = 30.0; speedMaxKmh = 60.0
+        }
     }
     
     // MARK: - Actions
@@ -849,16 +881,18 @@ struct RouteSimSheet: View {
     
     private func calculateRoute() {
         guard routeSimulator.userWaypoints.count >= 2 else { return }
+        let minMps = speedMinKmh / 3.6
+        let maxMps = speedMaxKmh / 3.6
 
         if routeSimulator.routeMode == .free {
             // DriftFix v2: 自由路线——不经过导航引擎，点在哪轨迹在哪（内部道路/园区可用）
             routeSimulator.travelMode = selectedMode
-            routeSimulator.buildFreeRoute(speedMult: speedMultiplier)
+            routeSimulator.buildFreeRoute(minSpeed: minMps, maxSpeed: maxMps)
             routeReady = true
             showRouteOnMap()
             return
         }
-        routeSimulator.calculateFlexibleRoute(points: routeSimulator.userWaypoints, mode: selectedMode, speedMult: speedMultiplier) { success, error in
+        routeSimulator.calculateFlexibleRoute(points: routeSimulator.userWaypoints, mode: selectedMode, minSpeed: minMps, maxSpeed: maxMps) { success, error in
             if success {
                 routeReady = true
                 showRouteOnMap()

@@ -104,6 +104,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var speedMultiplier: Double = 1.0
     private let updateInterval: TimeInterval = 1.0
 
+    // MARK: - DriftFix v2.2 速度区间（m/s）
+    // 匀速轨迹一眼假。播放时速度在 [min,max] 内慢速随机游走（带回归中值的惯性），
+    // 相邻点间距=当前速度×1s。GPX 存档保存的是实际注入序列（变间距），重放逐点还原。
+    var speedMinMps: Double = 1.3
+    var speedMaxMps: Double = 1.7
+
     // MARK: - DriftFix 坐标基准自动判定
     // 搜索结果/地图瓦片 = GCJ-02（实测：搜索 pin 落点正确）；
     // 中国大陆 MKDirections 返回的 polyline = WGS-84 真坐标（实测：一点 Calculate Routes 路线整体偏移）。
@@ -201,13 +207,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let stepDistance = speed * interval
         var result: [CLLocationCoordinate2D] = [coords[0]]
         var remainingDistance: Double = 0.0
-        
+
         for i in 1..<coords.count {
             let from = coords[i-1]; let to = coords[i]
             let segmentDistance = distanceBetween(from, to)
             guard segmentDistance > 0 else { continue }
             var coveredInSegment = remainingDistance > 0 ? -remainingDistance : 0.0
-            
+
             while coveredInSegment + stepDistance <= segmentDistance {
                 coveredInSegment += stepDistance
                 let fraction = coveredInSegment / segmentDistance
@@ -218,6 +224,42 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             remainingDistance = segmentDistance - coveredInSegment
         }
         if let last = coords.last { result.append(last) }
+        return result
+    }
+
+    /// DriftFix v2.2 变速插值：沿点列前进，每步距离=当前速度×interval，
+    /// 速度在 [min,max] 内慢速随机游走（向区间中值回归 + 随机漂移），杜绝匀速。
+    private func interpolateVariableRoute(coords: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double, interval: TimeInterval) -> [CLLocationCoordinate2D] {
+        guard coords.count >= 2 else { return coords }
+        let lo = max(minSpeed, 0.1)
+        let hi = max(maxSpeed, lo + 0.05)
+        let mid = (lo + hi) / 2
+        var result: [CLLocationCoordinate2D] = [coords[0]]
+        var speed = mid
+        for i in 1..<coords.count {
+            let from = coords[i - 1]
+            let to = coords[i]
+            var segRemaining = distanceBetween(from, to)
+            guard segRemaining > 0 else { continue }
+            var traveled: Double = 0
+            while segRemaining - traveled > 0.05 {
+                // 慢速游走：小步漂移 + 向中值回归，避免速度突变
+                let drift = Double.random(in: -0.25...0.25) * (hi - lo) + (mid - speed) * 0.3
+                speed = min(max(speed + drift, lo), hi)
+                var step = speed * interval
+                if traveled + step > segRemaining { step = segRemaining - traveled }
+                let t = (traveled + step) / segRemaining
+                result.append(CLLocationCoordinate2D(
+                    latitude: from.latitude + (to.latitude - from.latitude) * t,
+                    longitude: from.longitude + (to.longitude - from.longitude) * t
+                ))
+                traveled += step
+            }
+        }
+        if let last = coords.last, let lastResult = result.last,
+           lastResult.latitude != last.latitude || lastResult.longitude != last.longitude {
+            result.append(last)
+        }
         return result
     }
     
@@ -263,11 +305,11 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 自由路线：完全不经过导航引擎。用户点列(GCJ)依序直线插值 → routePoints。
     /// polylineIsWGS=false → updateLocation 逐点 GCJ→WGS 注入（与地图点选单点同一条正确路径）；
     /// 显示线 = 用户点原样连线（GCJ 画在 GCJ 瓦片上：零偏移、零吸附，内部道路随便走）。
-    func buildFreeRoute(speedMult: Double) {
+    func buildFreeRoute(minSpeed: Double, maxSpeed: Double) {
         guard userWaypoints.count >= 2 else { return }
-        let effectiveSpeed = max(travelMode.speed * speedMult, 0.2)
+        let effectiveSpeed = max((minSpeed + maxSpeed) / 2, 0.2)
         polylineIsWGS = false
-        routePoints = interpolateRoute(coords: userWaypoints, speed: effectiveSpeed, interval: updateInterval)
+        routePoints = interpolateVariableRoute(coords: userWaypoints, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
         totalPoints = routePoints.count
         currentPointIndex = 0
         progress = 0.0
@@ -288,11 +330,11 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 道路导航 + 任意多途径点：MKDirections 不支持多途经点，按 A→B、B→C… 分段链式算路拼接。
     /// 任一段无导航路线 → 直接失败并提示改用自由路线（绝不做路网吸附替换——这就是本修复要根除的行为）。
-    func calculateFlexibleRoute(points: [CLLocationCoordinate2D], mode: TravelMode, speedMult: Double, completion: @escaping (Bool, String?) -> Void) {
+    func calculateFlexibleRoute(points: [CLLocationCoordinate2D], mode: TravelMode, minSpeed: Double, maxSpeed: Double, completion: @escaping (Bool, String?) -> Void) {
         guard points.count >= 2 else { completion(false, "至少需要起点和终点两个点"); return }
         isCalculatingRoute = true
         travelMode = mode
-        speedMultiplier = speedMult
+        speedMultiplier = 1.0
         availableRoutes = []
         allRoutePolylines = []
         selectedRouteIndex = 0
@@ -315,8 +357,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                     }
                     self.polylineIsWGS = detectedWGS ?? false
                     self.requestStartCoord = points.first
-                    let eff = max(self.travelMode.speed * speedMult, 0.2)
-                    self.routePoints = self.interpolateRoute(coords: rawCoords, speed: eff, interval: self.updateInterval)
+                    let eff = max((minSpeed + maxSpeed) / 2, 0.2)
+                    self.routePoints = self.interpolateVariableRoute(coords: rawCoords, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: self.updateInterval)
                     self.totalPoints = self.routePoints.count
                     self.currentPointIndex = 0
                     self.progress = 0.0
