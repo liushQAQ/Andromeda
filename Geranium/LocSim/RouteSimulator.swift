@@ -99,6 +99,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var userWaypoints: [CLLocationCoordinate2D] = []   // 用户点列(GCJ 显示系)，顺序=起→途经→终
     @Published var waypointModes: [Bool] = []                     // 与 userWaypoints 对齐：true=随机(每次洗牌)，false=固定顺序
     @Published var visitSequenceText: String = ""                 // 本次实际访问顺序（起→#3→#1→终）
+    @Published var estimatedMeters: Double = 0                    // DriftFix v2.6: 预估总里程（米）
+    @Published var estimatedSteps: Int = 0                        // DriftFix v2.6: 预估步数 = 里程 ÷ 步幅
 
     private var routePoints: [CLLocationCoordinate2D] = []
     private var timer: Timer? = nil
@@ -117,6 +119,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 中国大陆 MKDirections 返回的 polyline = WGS-84 真坐标（实测：一点 Calculate Routes 路线整体偏移）。
     // 判据 = polyline 首点与请求起点(GCJ) 的距离：>200m 判为 WGS。
     // 判为 WGS 时：注入直接用 polyline 原始点（避免 gcj02ToWgs84 双重转换）；地图显示层转 GCJ。
+    private let strideForEstimate: Double = 1.07   // 步幅取老总真实轨迹: 15.93km/14911步 = 1.068m/步
     private var polylineIsWGS = false
     private var requestStartCoord: CLLocationCoordinate2D? = nil
     
@@ -414,6 +417,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let secs = totalMeters / eff
                 let m = Int(secs) / 60
                 self.estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+                self.estimatedMeters = totalMeters
+                self.estimatedSteps = Int(totalMeters / strideForEstimate)
                 completion(true, nil)
             }
         }
@@ -493,6 +498,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let secs = totalMeters / eff
         let m = Int(secs) / 60
         estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+        estimatedMeters = totalMeters
+        estimatedSteps = Int(totalMeters / strideForEstimate)
         return true
     }
 
@@ -633,6 +640,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                     let secs = totalDistance / eff
                     let m = Int(secs) / 60
                     self.estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+                    self.estimatedMeters = totalDistance
+                    self.estimatedSteps = Int(totalDistance / strideForEstimate)
                     completion(true, nil)
                 }
                 return
@@ -872,6 +881,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let secs = Double(coords.count) * updateInterval
         let minutes = Int(secs) / 60
         estimatedTime = minutes > 60 ? "\(minutes/60)h \(minutes%60)m" : "\(minutes)m \(Int(secs) % 60)s"
+        var savedMeters: Double = 0
+        for i in 1..<coords.count {
+            savedMeters += distanceBetween(coords[i - 1], coords[i])
+        }
+        estimatedMeters = savedMeters
+        estimatedSteps = Int(savedMeters / strideForEstimate)
         return true
     }
 

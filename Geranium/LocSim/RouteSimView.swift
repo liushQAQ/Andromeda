@@ -244,6 +244,13 @@ struct RouteSimSheet: View {
                                     .foregroundColor(.secondary)
                                     .padding(.horizontal)
                             }
+                            // DriftFix v2.6: 预估评估三件套（里程/时长/步数）
+                            if routeSimulator.estimatedMeters > 0 {
+                                Text(String(format: "预估: 总里程 %.2f km · 时长 %@ · 步数 ≈ %d 步", routeSimulator.estimatedMeters / 1000, routeSimulator.estimatedTime, routeSimulator.estimatedSteps))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal)
+                            }
                             // Start button
                             Button(action: startRoute) {
                                 HStack {
