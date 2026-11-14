@@ -329,10 +329,17 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         var out: [Int] = [0]
         let loopCount = max(1, loops)
         for l in 0..<loopCount {
-            var seq = middle.filter { !modeAt($0) }          // 固定点：保持相对顺序
-            var wilds = middle.filter { modeAt($0) }          // 随机点
+            var seq: [Int] = []
+            var wilds: [Int] = []
+            for m in middle {
+                if modeAt(m) { wilds.append(m) } else { seq.append(m) }   // 固定点按序 / 随机点
+            }
             if skip > 0 {
-                wilds = wilds.filter { Double.random(in: 0...1) >= skip }
+                var kept: [Int] = []
+                for w in wilds {
+                    if Double.random(in: 0.0...1.0) >= skip { kept.append(w) }
+                }
+                wilds = kept
             }
             wilds.shuffle()
             for w in wilds {
