@@ -1,0 +1,90 @@
+name: "Andromeda DriftFix TIPA v2.5.3"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Setup Theos + SDK（RootHelper 需要）
+        run: |
+          git clone --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          mkdir -p "$HOME/theos/sdks"
+          curl -fsSL -o /tmp/sdk.tar.xz "https://github.com/theos/sdks/raw/master/iPhoneOS16.5.sdk.tar.xz"
+          tar -xf /tmp/sdk.tar.xz -C "$HOME/theos/sdks"
+          ls "$HOME/theos/sdks"
+
+      - name: Build RootHelper（Theos tool）
+        env:
+          THEOS: /Users/runner/theos
+        run: |
+          cd RootHelper
+          make clean
+          make
+          ls -la .theos/obj/debug/GeraniumRootHelper
+
+      - name: Build App（免签）
+        run: |
+          xcodebuild -project Geranium.xcodeproj -scheme Geranium \
+            -configuration Debug \
+            -derivedDataPath build/DerivedData \
+            -destination 'generic/platform=iOS' \
+            ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
+
+      - name: Assemble TIPA（复刻 ipabuild.sh，去签名+entitlements+RootHelper）
+        run: |
+          APP_SRC="build/DerivedData/Build/Products/Debug-iphoneos/Geranium.app"
+          test -d "$APP_SRC"
+          cp -R "$APP_SRC" build/Geranium.app
+          codesign --remove build/Geranium.app || true
+          rm -rf build/Geranium.app/_CodeSignature build/Geranium.app/embedded.mobileprovision
+          cp RootHelper/.theos/obj/debug/GeraniumRootHelper build/Geranium.app/GeraniumRootHelper
+          ldid -Sentitlements.plist build/Geranium.app/Geranium
+          ldid -S"Bookmark Location in Geranium/entitlements.plist" \
+            "build/Geranium.app/PlugIns/Bookmark Location in Geranium.appex/Bookmark Location in Geranium"
+          cd build
+          rm -rf Payload
+          mkdir Payload
+          cp -R Geranium.app Payload/Geranium.app
+          zip -qry Geranium.tipa Payload
+          cd ..
+          cp build/Geranium.tipa "Geranium-2.5.3-driftfix1.tipa"
+          shasum -a 256 "Geranium-2.5.3-driftfix1.tipa" | tee sha256.txt
+          ls -la "Geranium-2.5.3-driftfix1.tipa"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Andromeda-DriftFix-TIPA
+          path: |
+            Geranium-2.5.3-driftfix1.tipa
+            sha256.txt
+          if-no-files-found: error
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.5.3-driftfix1
+          name: "Andromeda 2.5.3-driftfix1（单点保活治漂移）"
+          body: |
+            基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
+            改动：LocSimManager 单点注入后每 0.75s 保活重注入（原实现只注入一个静止点永不更新，locationd 融合定位与静止假点打架导致漂移）；路线跑完后终点继续保活。
+          files: |
+            Geranium-2.5.3-driftfix1.tipa
+            sha256.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
