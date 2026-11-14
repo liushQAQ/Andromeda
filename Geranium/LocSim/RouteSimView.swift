@@ -912,7 +912,7 @@ struct RouteSimSheet: View {
         ) { text, _ in
             guard let name = text, !name.isEmpty else { return }
             if routeSimulator.saveCurrentRoute(named: name) {
-                savedRoutes = RouteSimulator.listSavedRoutes()
+                savedRoutes = RouteSimulator.savedRouteInfos(sort: savedSort)
                 AlertKitAPI.present(title: "Saved!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
             } else {
                 UIApplication.shared.alert(body: "Nothing to save (no route loaded).")
