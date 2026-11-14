@@ -68,7 +68,7 @@ struct LocSimView: View {
                         HStack {
                             Image(systemName: "magnifyingglass")
                                 .foregroundColor(.gray)
-                            TextField("Search address...", text: $searchText, onCommit: {
+                            TextField("搜索地址...", text: $searchText, onCommit: {
                                 searchAddress()
                             })
                             .textFieldStyle(PlainTextFieldStyle())
@@ -97,7 +97,7 @@ struct LocSimView: View {
                                     searchResults = []
                                 }
                             }) {
-                                Text("Cancel")
+                                Text("取消")
                                     .font(.subheadline)
                             }
                         }
@@ -229,11 +229,11 @@ struct LocSimView: View {
             }
         }
         .actionSheet(isPresented: $showTimerPicker) {
-            ActionSheet(title: Text("Auto-Stop Timer"), message: Text("LocSim will stop automatically after:"), buttons: [
-                .default(Text("15 minutes")) { startTimer(minutes: 15) },
-                .default(Text("30 minutes")) { startTimer(minutes: 30) },
-                .default(Text("1 hour")) { startTimer(minutes: 60) },
-                .default(Text("2 hours")) { startTimer(minutes: 120) },
+            ActionSheet(title: Text("自动停止模拟"), message: Text("模拟将在以下时长后自动停止："), buttons: [
+                .default(Text("15 分钟")) { startTimer(minutes: 15) },
+                .default(Text("30 分钟")) { startTimer(minutes: 30) },
+                .default(Text("1 小时")) { startTimer(minutes: 60) },
+                .default(Text("2 小时")) { startTimer(minutes: 120) },
                 .cancel()
             ])
         }
@@ -263,7 +263,7 @@ struct LocSimView: View {
         joystickCoordinate = wgsCoordinate
 
         AlertKitAPI.present(
-            title: "Started!",
+            title: "已开始模拟",
             icon: .done,
             style: .iOS17AppleMusic,
             haptic: .success
@@ -282,7 +282,7 @@ struct LocSimView: View {
         joystickCoordinate = wgsCoordinate
 
         AlertKitAPI.present(
-            title: "Started!",
+            title: "已开始模拟",
             icon: .done,
             style: .iOS17AppleMusic,
             haptic: .success
@@ -305,7 +305,7 @@ struct LocSimView: View {
                 if let response = response {
                     searchResults = response.mapItems
                 } else {
-                    UIApplication.shared.alert(body: "No results found for '\(searchText)'")
+                    UIApplication.shared.alert(body: "没有找到「\(searchText)」的结果")
                 }
             }
         }
@@ -344,7 +344,7 @@ struct LocSimView: View {
                 cancelTimer()
             }
         }
-        AlertKitAPI.present(title: "Timer: \(minutes)m", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "定时: \(minutes)分", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
     
     private func cancelTimer() {
@@ -384,13 +384,13 @@ struct LocSimView: View {
             showRouteSheet.toggle()
         case .altitude:
             UIApplication.shared.TextFieldAlert(
-                title: "Set Altitude",
-                message: "Enter the altitude in meters.",
-                textFieldPlaceHolder: "Altitude (m)"
+                title: "设置海拔",
+                message: "输入海拔高度（米）。",
+                textFieldPlaceHolder: "海拔（米）"
             ) { altitudeText, _ in
                 if let altText = altitudeText, !altText.isEmpty {
                     self.altitude = altText
-                    AlertKitAPI.present(title: "Altitude Set!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                    AlertKitAPI.present(title: "海拔已设置", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 }
             }
         case .timer:
@@ -404,7 +404,7 @@ struct LocSimView: View {
         LocSimManager.stopLocSim()
         joystickActive = false
         cancelTimer()
-        AlertKitAPI.present(title: "Stopped!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "已停止", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
     
     // MARK: - Modern UI Helpers
@@ -443,7 +443,7 @@ struct ManualCoordinateSheet: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Coordinate")) {
+                Section(header: Text("坐标")) {
                     TextField("Latitude  例: 22.543210", text: $latText)
                         .keyboardType(.numbersAndPunctuation)
                         .autocapitalization(.none)
@@ -453,7 +453,7 @@ struct ManualCoordinateSheet: View {
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                 }
-                Section(header: Text("Datum 坐标系"),
+                Section(header: Text("坐标系"),
                         footer: Text("从中国地图/搜索结果抄的选 GCJ-02；从 GPX/真实 GPS 抄的选 WGS-84。选错会固定偏几百米。")) {
                     Picker("Datum", selection: $datum) {
                         ForEach(Datum.allCases) { Text($0.rawValue).tag($0) }
@@ -463,18 +463,18 @@ struct ManualCoordinateSheet: View {
                 }
                 Section {
                     Button(action: start) {
-                        Text("Simulate 模拟此坐标")
+                        Text("模拟此坐标")
                             .frame(maxWidth: .infinity)
                             .font(.headline)
                     }
                     .disabled(!inputValid)
                 }
             }
-            .navigationTitle("Manual Coordinate")
+            .navigationTitle("手动坐标")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Close") { dismiss() }
+                    Button("关闭") { dismiss() }
                 }
             }
         }
@@ -495,7 +495,7 @@ struct ManualCoordinateSheet: View {
         long = wgs.longitude
         let location = CLLocation(coordinate: wgs, altitude: altitude, horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
         LocSimManager.startLocSim(location: location)
-        AlertKitAPI.present(title: "Started!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "已开始模拟", icon: .done, style: .iOS17AppleMusic, haptic: .success)
         dismiss()
     }
 }

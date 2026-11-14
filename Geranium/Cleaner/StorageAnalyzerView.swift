@@ -42,7 +42,7 @@ struct StorageAnalyzerView: View {
                                         .foregroundStyle(
                                             LinearGradient(colors: [.indigo, .purple], startPoint: .leading, endPoint: .trailing)
                                         )
-                                    Text("Free")
+                                    Text("可用")
                                         .font(.system(size: 12, weight: .semibold))
                                         .foregroundColor(.secondary)
                                 }
@@ -58,7 +58,7 @@ struct StorageAnalyzerView: View {
                         if !isScanning {
                             VStack(spacing: 6) {
                                 HStack {
-                                    Text("Total Storage")
+                                    Text("总存储")
                                         .font(.system(size: 13, weight: .semibold))
                                         .foregroundColor(.secondary)
                                     Spacer()
@@ -94,7 +94,7 @@ struct StorageAnalyzerView: View {
                         // Category List
                         if !isScanning {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("CATEGORIES")
+                                Text("分类")
                                     .font(.system(size: 11, weight: .bold))
                                     .foregroundColor(.secondary)
                                     .padding(.leading, 4)
@@ -116,7 +116,7 @@ struct StorageAnalyzerView: View {
                     .padding(.bottom, 30)
                 }
             }
-            .navigationTitle("Storage")
+            .navigationTitle("存储")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 analyzeStorage()

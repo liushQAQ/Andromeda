@@ -96,11 +96,11 @@ struct AppProfilesView: View {
                     profileList
                 }
             }
-            .navigationTitle("App Profiles")
+            .navigationTitle("应用预设")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Close") { isPresented = false }
+                    Button("关闭") { isPresented = false }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showAddSheet = true }) {
@@ -121,10 +121,10 @@ struct AppProfilesView: View {
             Image(systemName: "apps.iphone")
                 .font(.system(size: 50))
                 .foregroundColor(.secondary.opacity(0.5))
-            Text("No App Profiles")
+            Text("还没有应用预设")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(.secondary)
-            Text("Create profiles to quickly switch\nlocations for different apps")
+            Text("创建预设，可为不同应用\n快速切换模拟位置")
                 .font(.caption)
                 .foregroundColor(.secondary.opacity(0.7))
                 .multilineTextAlignment(.center)
@@ -152,7 +152,7 @@ struct AppProfilesView: View {
                             Circle()
                                 .fill(.green)
                                 .frame(width: 8, height: 8)
-                            Text("ACTIVE")
+                            Text("生效中")
                                 .font(.system(size: 10, weight: .black))
                                 .foregroundColor(.green)
                         }
@@ -162,7 +162,7 @@ struct AppProfilesView: View {
             }
             
             // All Profiles
-            Section(header: Text("All Profiles")) {
+            Section(header: Text("全部预设")) {
                 ForEach(manager.profiles) { profile in
                     profileRow(profile)
                 }
@@ -176,11 +176,11 @@ struct AppProfilesView: View {
                 Button(action: {
                     manager.clearActive()
                     LocSimManager.stopLocSim()
-                    AlertKitAPI.present(title: "All Stopped", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                    AlertKitAPI.present(title: "已全部停止", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 }) {
                     HStack {
                         Image(systemName: "location.slash.fill")
-                        Text("Stop All Simulations")
+                        Text("停止全部模拟")
                     }
                     .foregroundColor(.red)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -235,8 +235,8 @@ struct AppProfilesView: View {
     private var addProfileSheet: some View {
         NavigationView {
             Form {
-                Section(header: Text("App")) {
-                    TextField("App name (e.g. Tinder, Instagram...)", text: $newAppName)
+                Section(header: Text("应用")) {
+                    TextField("应用名（如 Tinder、Instagram...）", text: $newAppName)
                     
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -262,8 +262,8 @@ struct AppProfilesView: View {
                     }
                 }
                 
-                Section(header: Text("Location")) {
-                    TextField("Location name (e.g. Paris, Tokyo...)", text: $newLocationName)
+                Section(header: Text("位置")) {
+                    TextField("位置名（如 巴黎、东京...）", text: $newLocationName)
                     
                     Toggle("Use Current Simulated Location", isOn: $useCurrentLocation)
                     
@@ -276,9 +276,9 @@ struct AppProfilesView: View {
                                 .foregroundColor(.secondary)
                         }
                     } else {
-                        TextField("Latitude", text: $customLat)
+                        TextField("纬度", text: $customLat)
                             .keyboardType(.decimalPad)
-                        TextField("Longitude", text: $customLong)
+                        TextField("经度", text: $customLong)
                             .keyboardType(.decimalPad)
                     }
                 }
@@ -287,7 +287,7 @@ struct AppProfilesView: View {
                     Button(action: saveProfile) {
                         HStack {
                             Image(systemName: "plus.circle.fill")
-                            Text("Create Profile")
+                            Text("创建预设")
                         }
                         .foregroundColor(.indigo)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -295,11 +295,11 @@ struct AppProfilesView: View {
                     .disabled(newAppName.isEmpty || newLocationName.isEmpty)
                 }
             }
-            .navigationTitle("New Profile")
+            .navigationTitle("新预设")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { showAddSheet = false }
+                    Button("取消") { showAddSheet = false }
                 }
             }
         }
@@ -333,7 +333,7 @@ struct AppProfilesView: View {
         customLat = ""
         customLong = ""
         showAddSheet = false
-        AlertKitAPI.present(title: "Profile Created!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "预设已创建！", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
     
     private func activateProfile(_ profile: AppProfile) {

@@ -88,7 +88,7 @@ func DisableScreenTime(screentimeagentd: Bool, usagetrackingd: Bool, homed: Bool
 func enableBack() {
     var canIProceed = false
     if !FileManager.default.fileExists(atPath: STBckPath) {
-        UIApplication.shared.confirmAlert(title: "Backup file not found.", body: "Do you want to look for other backup files (Cowabunga or TrollBox) ?", onOK: {
+        UIApplication.shared.confirmAlert(title: "未找到备份文件。", body: "要查找其他备份文件（Cowabunga 或 TrollBox）吗？", onOK: {
             try? FileManager.default.removeItem(atPath: STString)
             if FileManager.default.fileExists(atPath: "/var/mobile/Library/Preferences/live.cclerc.ScreenTimeAgent.plist") {
                 try? FileManager.default.copyItem(atPath: "/var/mobile/Library/Preferences/live.cclerc.ScreenTimeAgent.plist", toPath: STString)
@@ -99,7 +99,7 @@ func enableBack() {
                 doStuff()
             }
             else {
-                UIApplication.shared.confirmAlert(title: "Backup file still not found.", body: "No backup file found. Are you sure you want to proceed ? Old preferences might not be restored.", onOK: {
+                UIApplication.shared.confirmAlert(title: "仍未找到备份文件。", body: "没有找到备份文件。确定继续吗？旧偏好设置可能无法恢复。", onOK: {
                     doStuff()
                 }, noCancel: false, onCancel: {
                     canIProceed = false

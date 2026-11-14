@@ -63,7 +63,7 @@ struct RouteSimSheet: View {
                     } else {
                         // MARK: - Start Point
                         locationCard(
-                            title: "Start Point",
+                            title: "起点",
                             icon: "play.circle.fill",
                             iconColor: .green,
                             text: $startText,
@@ -80,7 +80,7 @@ struct RouteSimSheet: View {
                         
                         // MARK: - End Point
                         locationCard(
-                            title: "Destination",
+                            title: "终点",
                             icon: "flag.checkered.circle.fill",
                             iconColor: .red,
                             text: $endText,
@@ -101,7 +101,7 @@ struct RouteSimSheet: View {
                         
                         // MARK: - Travel Mode
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Travel Mode")
+                            Text("出行方式")
                                 .font(.headline)
                                 .padding(.horizontal)
                             
@@ -141,7 +141,7 @@ struct RouteSimSheet: View {
                         // MARK: - DriftFix v2.2 速度区间（区间内随机游走，杜绝匀速）
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("Speed 速度区间")
+                                Text("速度区间")
                                     .font(.headline)
                                 Spacer()
                                 Text(String(format: "%.1f ~ %.1f km/h", speedMinKmh, speedMaxKmh))
@@ -211,10 +211,10 @@ struct RouteSimSheet: View {
                                 HStack {
                                     Image(systemName: "map.fill")
                                         .foregroundColor(.accentColor)
-                                    Text("Select Route")
+                                    Text("选择路线")
                                         .font(.headline)
                                     Spacer()
-                                    Text("\(routeSimulator.availableRoutes.count) route(s)")
+                                    Text("共 \(routeSimulator.availableRoutes.count) 条路线")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
@@ -232,7 +232,7 @@ struct RouteSimSheet: View {
                             Button(action: startRoute) {
                                 HStack {
                                     Image(systemName: "play.fill")
-                                    Text("Start Route Simulation")
+                                    Text("开始路线模拟")
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding()
@@ -249,7 +249,7 @@ struct RouteSimSheet: View {
                             Button(action: saveCurrentRoute) {
                                 HStack {
                                     Image(systemName: "square.and.arrow.down.fill")
-                                    Text("Save Route")
+                                    Text("保存线路")
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding()
@@ -269,11 +269,11 @@ struct RouteSimSheet: View {
                 }
                 .padding(.vertical)
             }
-            .navigationTitle("Andromeda Navigation")
+            .navigationTitle("路线模拟")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Close") {
+                    Button("关闭") {
                         isPresented = false
                     }
                 }
@@ -302,7 +302,7 @@ struct RouteSimSheet: View {
             .sheet(isPresented: $showGPXPicker) {
                 GPXDocumentPicker { url in
                     guard let result = GPXParser.parse(url: url), !result.isEmpty else {
-                        UIApplication.shared.alert(body: "Failed to parse GPX file or file is empty.")
+                        UIApplication.shared.alert(body: "GPX 文件解析失败或为空。")
                         return
                     }
                     
@@ -322,7 +322,7 @@ struct RouteSimSheet: View {
                             span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
                         )
                         
-                        AlertKitAPI.present(title: "GPX Loaded! \(coords.count) pts", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                        AlertKitAPI.present(title: "GPX 已载入！\(coords.count) 个点", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 }
             }
@@ -343,7 +343,7 @@ struct RouteSimSheet: View {
     // MARK: - DriftFix v2 线路模式选择
     private var routeModeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Route Mode 线路模式")
+            Text("线路模式")
                 .font(.headline)
                 .padding(.horizontal)
             HStack(spacing: 12) {
@@ -386,7 +386,7 @@ struct RouteSimSheet: View {
     private var addWaypointCard: some View {
         VStack(spacing: 8) {
             locationCard(
-                title: "Add Waypoint 添加途径点",
+                title: "添加途径点",
                 icon: "mappin.circle.fill",
                 iconColor: .blue,
                 text: $wptText,
@@ -477,7 +477,7 @@ struct RouteSimSheet: View {
             HStack {
                 Image(systemName: "list.number")
                     .foregroundColor(.accentColor)
-                Text("Route Points 点序列")
+                Text("点序列")
                     .font(.headline)
                 Spacer()
                 Text("\(routeSimulator.userWaypoints.count) pts")
@@ -549,7 +549,7 @@ struct RouteSimSheet: View {
                             .font(.subheadline)
                             .fontWeight(.semibold)
                         if index == 0 {
-                            Text("FASTEST")
+                            Text("最快")
                                 .font(.system(size: 9, weight: .bold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -588,7 +588,7 @@ struct RouteSimSheet: View {
                     HStack(spacing: 4) {
                         Image(systemName: "speedometer")
                             .font(.caption2)
-                        Text("ETA: \(routeSimulator.estimatedTime)")
+                        Text("预计时间: \(routeSimulator.estimatedTime)")
                             .font(.caption)
                             .foregroundColor(.accentColor)
                     }
@@ -622,7 +622,7 @@ struct RouteSimSheet: View {
                 HStack {
                     Image(systemName: selectedMode.icon)
                         .foregroundColor(.accentColor)
-                    Text("Route in Progress")
+                    Text("路线模拟进行中")
                         .font(.headline)
                     Spacer()
                     Text("\(Int(routeSimulator.progress * 100))%")
@@ -635,11 +635,11 @@ struct RouteSimSheet: View {
                     .progressViewStyle(LinearProgressViewStyle(tint: .accentColor))
                 
                 HStack {
-                    Text("Point \(routeSimulator.currentPointIndex)/\(routeSimulator.totalPoints)")
+                    Text("进度点 \(routeSimulator.currentPointIndex)/\(routeSimulator.totalPoints)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
-                    Text("ETA: \(routeSimulator.estimatedTime)")
+                    Text("预计时间: \(routeSimulator.estimatedTime)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -673,7 +673,7 @@ struct RouteSimSheet: View {
                     routeSimulator.stopSimulation()
                     routeReady = false
                     AlertKitAPI.present(
-                        title: "Route Stopped",
+                        title: "路线已停止",
                         icon: .done,
                         style: .iOS17AppleMusic,
                         haptic: .success
@@ -681,7 +681,7 @@ struct RouteSimSheet: View {
                 }) {
                     HStack {
                         Image(systemName: "stop.fill")
-                        Text("Stop")
+                        Text("停止")
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -736,7 +736,7 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             
             HStack {
-                TextField("Search address...", text: text, onCommit: {
+                TextField("搜索地址...", text: text, onCommit: {
                     searchLocation(query: text.wrappedValue, field: field)
                 })
                 .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -917,7 +917,7 @@ struct RouteSimSheet: View {
             HStack {
                 Image(systemName: "tray.full.fill")
                     .foregroundColor(.accentColor)
-                Text("Saved Routes")
+                Text("保存的线路")
                     .font(.headline)
                 Spacer()
                 Text("\(savedRoutes.count) 条")
@@ -1016,7 +1016,7 @@ struct RouteSimSheet: View {
             guard let newName = text, !newName.isEmpty else { return }
             if RouteSimulator.renameSavedRoute(at: info.url, to: newName) != nil {
                 refreshSavedRoutes()
-                AlertKitAPI.present(title: "Renamed!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                AlertKitAPI.present(title: "已重命名", icon: .done, style: .iOS17AppleMusic, haptic: .success)
             } else {
                 UIApplication.shared.alert(body: "重命名失败")
             }
@@ -1030,7 +1030,7 @@ struct RouteSimSheet: View {
             onOK: {
                 if RouteSimulator.deleteSavedRoute(at: info.url) {
                     refreshSavedRoutes()
-                    AlertKitAPI.present(title: "Deleted!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                    AlertKitAPI.present(title: "已删除", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                 } else {
                     UIApplication.shared.alert(body: "删除失败")
                 }
@@ -1041,15 +1041,15 @@ struct RouteSimSheet: View {
 
     private func saveCurrentRoute() {
         UIApplication.shared.TextFieldAlert(
-            title: "Route Name",
+            title: "线路名称",
             textFieldPlaceHolder: "Example: Morning Run"
         ) { text, _ in
             guard let name = text, !name.isEmpty else { return }
             if routeSimulator.saveCurrentRoute(named: name) {
                 savedRoutes = RouteSimulator.savedRouteInfos(sort: savedSort)
-                AlertKitAPI.present(title: "Saved!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                AlertKitAPI.present(title: "已保存", icon: .done, style: .iOS17AppleMusic, haptic: .success)
             } else {
-                UIApplication.shared.alert(body: "Nothing to save (no route loaded).")
+                UIApplication.shared.alert(body: "没有可保存的内容（尚未载入路线）。")
             }
         }
     }
@@ -1061,9 +1061,9 @@ struct RouteSimSheet: View {
                 let rect = poly.boundingMapRect
                 mapRegion = MKCoordinateRegion(rect.insetBy(dx: -rect.size.width * 0.2, dy: -rect.size.height * 0.2))
             }
-            AlertKitAPI.present(title: "Loaded!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+            AlertKitAPI.present(title: "已载入", icon: .done, style: .iOS17AppleMusic, haptic: .success)
         } else {
-            UIApplication.shared.alert(body: "Failed to load route file.")
+            UIApplication.shared.alert(body: "线路文件载入失败。")
         }
     }
     
@@ -1071,7 +1071,7 @@ struct RouteSimSheet: View {
         routeSimulator.startSimulation(altitude: 0.0)
         
         AlertKitAPI.present(
-            title: "Route Started!",
+            title: "路线已开始！",
             icon: .done,
             style: .iOS17AppleMusic,
             haptic: .success

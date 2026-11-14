@@ -15,52 +15,52 @@ struct WelcomeView: View {
     @StateObject private var appSettings = AppSettings()
     var body: some View {
         List {
-            Section(header: Text("Setup")) {
-                Text("Welcome to Andromeda, a powerful iOS toolbox for TrollStore. Simulate your location with joystick & routes, manage daemons, clean storage with detailed reports, and more. Developed by son3ra1n.")
+            Section(header: Text("初始设置")) {
+                Text("欢迎使用 Andromeda——面向 TrollStore 的 iOS 工具箱：摇杆与路线定位模拟、守护进程管理、精细化存储清理等。由 son3ra1n 开发。")
             }
             if getDeviceCode() == "iPhone8,4" {
-                Section(header: Text("Hi ! SE 1 User")) {
-                    Text("It looks like you are using the app on an iPhone SE 2016 (1st gen). You might encounter serious UI issues. Please excuse me in advance.")
+                Section(header: Text("你好！iPhone SE 一代用户")) {
+                    Text("检测到你在 iPhone SE 2016（一代）上使用，可能出现严重 UI 问题，提前致歉。")
                 }
             }
-            Section(header: Text("Log Collection")) {
-                Text("We collect some logs that are uploaded to our server for fixing bugs and adressing crash logs. The logs never contains any of your personal information, just your device type and the crash log itself. We also collect measurement information to see what was the most used in the app. You can choose if you want to prevent ANY data from being sent to our server.")
+            Section(header: Text("日志收集")) {
+                Text("我们会收集少量日志上传服务器，用于修 bug 和分析崩溃。日志不含个人信息，只有设备类型与崩溃日志本身，另含功能使用统计。你可以选择完全阻止上传。")
                 Toggle(isOn: $loggingAllowed) {
-                    Text("Enable log collection")
+                    Text("启用日志收集")
                 }
                 .onChange(of: loggingAllowed) { newValue in
                     if !loggingAllowed {
-                        UIApplication.shared.alert(title: "Warning", body: "Disabling logging might make things more difficult for developers if you have an issue.")
+                        UIApplication.shared.alert(title: "警告", body: "关闭日志后，遇到问题时开发者更难排查。")
                     }
                 }
             }
             
-            Section(header: Text("Update Warnings")) {
-                Text("When a new update is published, you will receive a pop-up on app launch asking you if you want to update. You can prevent this from hapenning")
+            Section(header: Text("更新提醒")) {
+                Text("发布新版本时，应用启动会弹窗询问是否更新。你可以关闭该提醒。")
                 Toggle(isOn: $updBypass) {
-                    Text("Disable update pop-up")
+                    Text("关闭更新弹窗")
                 }
             }
             
-            Section(header: Text("Cleaner File Sizes")) {
-                Text("This is an issue that might incorrectly set permissions when calculating file sizes for your device.")
+            Section(header: Text("清理体积统计")) {
+                Text("在你的设备上计算文件体积时，可能出现权限设置不正确的问题。")
                 Toggle(isOn: $appSettings.getSizes) {
-                    Text("Calculate File Size")
+                    Text("计算文件体积")
                 }
             }
             if !updBypass {
-                Section(header: Text("WARNING")) {
-                    Text("If you want to enable auto-update, you need to turn on Magnifier URL Scheme in TrollStore.")
-                    Text("1. Open TrollStore")
-                    Text("2. Go to Settings")
-                    Text("3. Enable URL Scheme")
+                Section(header: Text("警告")) {
+                    Text("要启用自动更新，需在 TrollStore 中开启「放大器 URL Scheme」。")
+                    Text("1. 打开 TrollStore")
+                    Text("2. 进入设置")
+                    Text("3. 开启 URL Scheme")
                 }
             }
         }
-        .navigationTitle("Welcome!")
+        .navigationTitle("欢迎！")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Dismiss") {
+                Button("知道了") {
                     close()
                 }
             }

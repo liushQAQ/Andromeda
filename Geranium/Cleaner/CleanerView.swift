@@ -64,7 +64,7 @@ struct CleanerView: View {
                 // check if smth is selected
                 if safari || appCaches || otaCaches || leftoverCaches || custompathselect {
                     Button("Clean !", action: {
-                        UIApplication.shared.confirmAlert(title: "Selected options", body: "Safari Caches: \(truelyEnabled(safari))\nGeneral Caches: \(truelyEnabled(appCaches))\nOTA Update Caches: \(truelyEnabled(otaCaches))\nApps Leftover Caches: \(truelyEnabled(leftoverCaches))\(customTest(isEnabled: custompathselect))\n Are you sure you want to permanently delete those files ? \(draftWarning(isEnabled: leftoverCaches))", onOK: {
+                        UIApplication.shared.confirmAlert(title: "已选选项", body: "Safari 缓存: \(truelyEnabled(safari))\n通用缓存: \(truelyEnabled(appCaches))\nOTA 更新缓存: \(truelyEnabled(otaCaches))\n应用残留缓存: \(truelyEnabled(leftoverCaches))\(customTest(isEnabled: custompathselect))\n 确定要永久删除这些文件吗？ \(draftWarning(isEnabled: leftoverCaches))", onOK: {
                             print("")
                             withAnimation {
                                 var sizetotal = (safariCacheSize + GlobalCacheSize + OTACacheSize + leftOverCacheSize) / (1024 * 1024)
@@ -86,7 +86,7 @@ struct CleanerView: View {
                 }
                 else {
                     Button("Clean !", action: {
-                        UIApplication.shared.confirmAlert(title: "Nothing Selected", body: "Please select at least one option to clean.", onOK: {
+                        UIApplication.shared.confirmAlert(title: "未选择任何项", body: "请至少选择一项进行清理。", onOK: {
                             print("nothing selected")
                         }, noCancel: false, yes: true)
                     })
@@ -100,7 +100,7 @@ struct CleanerView: View {
                 // Normal Toggles
                 Toggle(isOn: $safari) {
                     Image(systemName: "safari")
-                    Text("Safari Caches")
+                    Text("Safari 缓存")
                     if shouldIGetSizes {
                         Text("> "+String(format: "%.2f MB", safariCacheSize / (1024 * 1024)))
                     }
@@ -111,7 +111,7 @@ struct CleanerView: View {
                 .onAppear {
                     if ProcessInfo().operatingSystemVersion.majorVersion == 15, appSettings.firstCleanerTime {
                         appSettings.firstCleanerTime = false
-                        UIApplication.shared.confirmAlert(title: "⚠️ You are on iOS 15 ⚠️", body: "Cleaning on iOS 15 might break notifications, and some app permissions. Do you want to enable measures that will keep your phone safe ? You might not get everything completly cleaned up. Pressing yes on iOS 15 will keep your device safe.", onOK: {
+                        UIApplication.shared.confirmAlert(title: "⚠️ 你在使用 iOS 15 ⚠️", body: "在 iOS 15 上清理可能导致通知与部分应用权限异常。要启用保护措施吗？可能无法清理干净；选「好」会优先保证设备安全。", onOK: {
                             appSettings.tmpClean = false
                         }, noCancel: false, onCancel: {
                             appSettings.tmpClean = true
@@ -125,7 +125,7 @@ struct CleanerView: View {
                 }
                 Toggle(isOn: $appCaches) {
                     Image(systemName: "app.dashed")
-                    Text("General Caches")
+                    Text("通用缓存")
                     if shouldIGetSizes {
                         Text("> " + String(format: "%.2f MB", GlobalCacheSize / (1024 * 1024)))
                     }
@@ -142,7 +142,7 @@ struct CleanerView: View {
                 
                 Toggle(isOn: $otaCaches) {
                     Image(systemName: "restart.circle")
-                    Text("OTA Update Caches")
+                    Text("OTA 更新缓存")
                     if shouldIGetSizes {
                         Text("> " + String(format: "%.2f MB", OTACacheSize / (1024 * 1024)))
                     }
@@ -159,7 +159,7 @@ struct CleanerView: View {
                 
                 Toggle(isOn: $leftoverCaches) {
                     Image(systemName: "app.badge.checkmark")
-                    Text("Apps Leftover Caches")
+                    Text("应用残留缓存")
                     if shouldIGetSizes {
                         Text("> " + String(format: "%.2f MB", leftOverCacheSize / (1024 * 1024)))
                     }
@@ -176,7 +176,7 @@ struct CleanerView: View {
                 if !customPaths.isEmpty {
                     Toggle(isOn: $custompathselect) {
                         Image(systemName: "folder")
-                        Text("Custom Paths")
+                        Text("自定义路径")
                         if shouldIGetSizes {
                             Text("> " + String(format: "%.2f MB", customPathsSize / (1024 * 1024)))
                         }
@@ -213,9 +213,9 @@ struct CleanerView: View {
                         progressAmount = 0.9
                         errorVibrate()
                     }
-                Text("Error !")
+                Text("出错了！")
                     .foregroundStyle(.red)
-                Text("An error occured with the RootHelper.")
+                Text("RootHelper 出现错误。")
                     .foregroundColor(.secondary)
                     .font(.footnote)
                     .multilineTextAlignment(.center)
@@ -247,7 +247,7 @@ struct CleanerView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if defaultView {
-                    Text("Cleaner")
+                    Text("清理")
                         .font(.title2)
                         .bold()
                 }
@@ -293,7 +293,7 @@ struct CleanerView: View {
         .sheet(isPresented: $customPathSheet) {
             CustomPaths()
                 .onDisappear {
-                    UIApplication.shared.confirmAlert(title: "You need to quit the app to apply changes.", body: "You might want to open it back right after to continue.", onOK: {
+                    UIApplication.shared.confirmAlert(title: "需要退出应用以应用更改。", body: "稍后可重新打开应用继续操作。", onOK: {
                         exitGracefully()
                     }, noCancel: true)
                 }
@@ -348,7 +348,7 @@ struct CleanerView: View {
                 }
                 .onAppear { successVibrate() }
                 
-                Text("Cleaning Complete!")
+                Text("清理完成！")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                 
                 VStack(spacing: 4) {
@@ -357,7 +357,7 @@ struct CleanerView: View {
                         .foregroundStyle(
                             LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing)
                         )
-                    Text("MB Freed")
+                    Text("MB 已释放")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.secondary)
                 }
@@ -373,7 +373,7 @@ struct CleanerView: View {
                 
                 // Category Breakdown
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("BREAKDOWN")
+                    Text("明细")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.secondary)
                         .padding(.leading, 4)
@@ -408,7 +408,7 @@ struct CleanerView: View {
                 }) {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
-                        Text("Done")
+                        Text("完成")
                     }
                     .font(.headline)
                     .foregroundColor(.white)

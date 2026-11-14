@@ -145,7 +145,7 @@ extension UIApplication {
         DispatchQueue.main.async {
             currentUIAlertController = UIAlertController(title: title, message: body, preferredStyle: .alert)
             if !noCancel {
-                currentUIAlertController?.addAction(.init(title: "Cancel", style: .cancel, handler: { _ in
+                currentUIAlertController?.addAction(.init(title: "取消", style: .cancel, handler: { _ in
                     onCancel?()
                 }))
             }
@@ -178,7 +178,7 @@ extension UIApplication {
             completion(firstText, secondText)
         }
         
-        let cancelAction = UIAlertAction(title: "Cancel", style: .cancel, handler: nil)
+        let cancelAction = UIAlertAction(title: "取消", style: .cancel, handler: nil)
         alertController.addAction(okAction)
         alertController.addAction(cancelAction)
         
@@ -220,7 +220,7 @@ func checkSandbox() -> Bool {
         do {
             try fileManager.removeItem(atPath: "/var/mobile/andromedatemp")
         } catch {
-            print("Failed to remove sandbox check file")
+            print("移除沙盒检查文件失败")
         }
         return false
     }

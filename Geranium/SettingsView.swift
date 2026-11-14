@@ -63,16 +63,16 @@ struct SettingsView: View {
         NavigationView {
             List {
                 // MARK: - ByeTime Settings
-                Section(header: Label("ByeTime", systemImage: "hourglass"), footer: Text("ByeTime allows you to completely disable Screen Time, iCloud or not.")) {
+                Section(header: Label("ByeTime", systemImage: "hourglass"), footer: Text("ByeTime 可完全禁用屏幕使用时间（无论 iCloud 是否开启）。")) {
                     NavigationLink(destination: ByeTimeView(DebugStuff: $DebugStuff)) {
                         HStack {
-                            Text("ByeTime Settings")
+                            Text("ByeTime 设置")
                         }
                     }
                 }
                 
                 // MARK: - Language
-                Section(header: Label("App Language", systemImage: "magnifyingglass"), footer: Text("Choose your preferred language. The app will exit to apply changes.")) {
+                Section(header: Label("应用语言", systemImage: "magnifyingglass"), footer: Text("选择界面语言。应用会退出以应用更改。")) {
                     Picker("Language", selection: $localisation) {
                         ForEach(sortedLocalisalist, id: \.self) { abbreviation in
                             Text(languageMapping[abbreviation] ?? abbreviation)
@@ -92,7 +92,7 @@ struct SettingsView: View {
                             appSettings.languageCode = ""
                             UserDefaults.standard.set(["\(newValue)"], forKey: "AppleLanguages")
                         }
-                        UIApplication.shared.confirmAlert(title: "Restart Required", body: "The app needs to restart to apply language changes.", onOK: {
+                        UIApplication.shared.confirmAlert(title: "需要重启应用", body: "应用需要重启以应用语言更改。", onOK: {
                             exitGracefully()
                         }, noCancel: true)
                     }
@@ -102,15 +102,15 @@ struct SettingsView: View {
                 }
                 
                 // MARK: - Debug
-                Section(header: Label("Debug", systemImage: "chevron.left.forwardslash.chevron.right"), footer: Text("Show experimental debug values.")) {
+                Section(header: Label("调试", systemImage: "chevron.left.forwardslash.chevron.right"), footer: Text("显示实验性调试信息。")) {
                     Toggle(isOn: $DebugStuff) {
-                        Text("Debug Info")
+                        Text("调试信息")
                     }
                     if DebugStuff {
-                        Text("Language: \(localisation)")
-                        Button("Reset Language") {
+                        Text("语言: \(localisation)")
+                        Button("重置语言") {
                             UserDefaults.standard.set(["Base"], forKey: "AppleLanguages")
-                            UIApplication.shared.confirmAlert(title: "Restart Required", body: "The app needs to restart.", onOK: {
+                            UIApplication.shared.confirmAlert(title: "需要重启应用", body: "应用需要重启。", onOK: {
                                 exitGracefully()
                             }, noCancel: true)
                         }
@@ -120,15 +120,15 @@ struct SettingsView: View {
                 }
                 
                 // MARK: - Cleaner Settings
-                Section(header: Label("Cleaner", systemImage: "trash"), footer: Text("Configure cleaning options.")) {
+                Section(header: Label("清理", systemImage: "trash"), footer: Text("配置清理选项。")) {
                     Toggle(isOn: $appSettings.keepCheckBoxesC) {
-                        Text("Keep selection after cleaning")
+                        Text("清理后保留勾选")
                     }
                     Toggle(isOn: $appSettings.getSizes) {
-                        Text("Calculate Cleaning Size")
+                        Text("计算清理体积")
                     }
                     .onChange(of: appSettings.getSizes) { newValue in
-                        UIApplication.shared.confirmAlert(title: "Restart Required", body: "The app needs to restart.", onOK: {
+                        UIApplication.shared.confirmAlert(title: "需要重启应用", body: "应用需要重启。", onOK: {
                             exitGracefully()
                         }, noCancel: true)
                     }
@@ -136,17 +136,17 @@ struct SettingsView: View {
                         get: { !appSettings.tmpClean },
                         set: { appSettings.tmpClean = !$0 }
                     )) {
-                        Text("Safe Clean (Enable for iOS 15)")
+                        Text("安全清理（iOS 15 请开启）")
                     }
                     .onChange(of: appSettings.tmpClean) { newValue in
-                        UIApplication.shared.confirmAlert(title: "Restart Required", body: "The app needs to restart.", onOK: {
+                        UIApplication.shared.confirmAlert(title: "需要重启应用", body: "应用需要重启。", onOK: {
                             exitGracefully()
                         }, noCancel: true)
                     }
                     
                     if DebugStuff {
                         HStack {
-                            Text("Minimum Size:")
+                            Text("最小体积：")
                             Spacer()
                             TextField("50.0 MB", text: $MinimCal)
                                 .keyboardType(.decimalPad)
@@ -165,13 +165,13 @@ struct SettingsView: View {
                 }
                 
                 // MARK: - LocSim Settings
-                Section(header: Label("LocSim", systemImage: "location.fill.viewfinder"), footer: Text("Configure location simulation settings.")) {
+                Section(header: Label("定位模拟", systemImage: "location.fill.viewfinder"), footer: Text("配置定位模拟参数。")) {
                     Toggle(isOn: $appSettings.locSimMultipleAttempts) {
-                        Text("Try stopping LocSim multiple times")
+                        Text("多次尝试停止定位模拟")
                     }
                     if appSettings.locSimMultipleAttempts {
                         HStack {
-                            Text("Attempts:")
+                            Text("尝试次数：")
                             Spacer()
                             TextField("3", text: $LocSimTries)
                                 .keyboardType(.numberPad)
@@ -187,7 +187,7 @@ struct SettingsView: View {
                 }
                 
                 // MARK: - Startup
-                Section(header: Label("Startup", systemImage: "play"), footer: Text("Customize startup behavior.")) {
+                Section(header: Label("启动", systemImage: "play"), footer: Text("自定义启动行为。")) {
                     Picker("Default Tab", selection: $defaultTab) {
                         ForEach(Array(defaultTabList.keys).sorted(), id: \.self) { key in
                             Text(defaultTabList[key] ?? "")
@@ -197,28 +197,28 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     .onChange(of: defaultTab) { newValue in
                         appSettings.defaultTab = defaultTab
-                        UIApplication.shared.confirmAlert(title: "Restart Required", body: "The app needs to restart.", onOK: {
+                        UIApplication.shared.confirmAlert(title: "需要重启应用", body: "应用需要重启。", onOK: {
                             exitGracefully()
                         }, noCancel: true)
                     }
                     Toggle(isOn: $appSettings.tsBypass) {
-                        Text("Bypass TrollStore Pop Up")
+                        Text("跳过 TrollStore 弹窗")
                     }
                     .onChange(of: appSettings.tsBypass) { newValue in
-                        AlertKitAPI.present(title: "Saved!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                        AlertKitAPI.present(title: "已保存", icon: .done, style: .iOS17AppleMusic, haptic: .success)
                     }
                 }
                 
                 // MARK: - About
-                Section(header: Label("About", systemImage: "info.circle")) {
+                Section(header: Label("关于", systemImage: "info.circle")) {
                     HStack {
-                        Text("App")
+                        Text("应用")
                         Spacer()
                         Text("Andromeda v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
                             .foregroundColor(.secondary)
                     }
                     HStack {
-                        Text("Developer")
+                        Text("开发者")
                         Spacer()
                         Text("son3ra1n")
                             .foregroundColor(.indigo)
@@ -229,7 +229,7 @@ struct SettingsView: View {
                         }
                     }) {
                         HStack {
-                            Text("Source Code")
+                            Text("源代码")
                             Spacer()
                             Image(systemName: "arrow.up.right.square")
                                 .foregroundColor(.indigo)
@@ -238,15 +238,15 @@ struct SettingsView: View {
                 }
                 
                 // MARK: - Acknowledgments
-                Section(header: Label("Acknowledgments", systemImage: "heart.fill"), footer: Text("Andromeda is inspired by and built upon the Geranium project by c22dev. Licensed under GPL-3.0.")) {
+                Section(header: Label("致谢", systemImage: "heart.fill"), footer: Text("Andromeda 基于 c22dev 的 Geranium 项目构建，遵循 GPL-3.0 协议。")) {
                     Button(action: {
                         UIApplication.shared.open(URL(string: "https://github.com/c22dev/Geranium")!)
                     }) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Geranium by c22dev")
+                                Text("Geranium（c22dev）")
                                     .foregroundColor(.primary)
-                                Text("Original project & core architecture")
+                                Text("原项目与核心架构")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -262,7 +262,7 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("BomberFish")
                                     .foregroundColor(.primary)
-                                Text("Daemon listing contributions")
+                                Text("守护进程列表贡献")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -273,7 +273,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("设置")
         }
     }
 }

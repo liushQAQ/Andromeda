@@ -25,7 +25,7 @@ struct SuperviseView: View {
     @ViewBuilder
         private func SuperviseMainView() -> some View {
             VStack {
-                TextField("Enter organisation name...", text: $organisation_name)
+                TextField("输入组织名称...", text: $organisation_name)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .padding(.trailing, 50)
                     .padding(.leading, 50)
@@ -45,17 +45,17 @@ struct SuperviseView: View {
                     catch {
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                         errorVibrate()
-                        UIApplication.shared.confirmAlert(title: "Error", body: "The app encountered an error while writing to file. Respring anyway ?", onOK: {respring()}, noCancel: false, yes: true)
+                        UIApplication.shared.confirmAlert(title: "错误", body: "写入文件时出错。仍要重启桌面吗？", onOK: {respring()}, noCancel: false, yes: true)
                     }
                     if !organisation_name.isEmpty {
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                         successVibrate()
-                        UIApplication.shared.confirmAlert(title: "Done !", body: "Your device is now supervised with the custon name \(organisation_name). Please respring now.", onOK: {respring()}, noCancel: true)
+                        UIApplication.shared.confirmAlert(title: "已完成！", body: "设备已使用自定义名称 \(organisation_name) 进入受监管状态。请立即重启桌面。", onOK: {respring()}, noCancel: true)
                     }
                     else {
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                         successVibrate()
-                        UIApplication.shared.confirmAlert(title: "Done !", body: "Your device is now supervised. Please respring now.", onOK: {respring()}, noCancel: true)
+                        UIApplication.shared.confirmAlert(title: "已完成！", body: "设备已进入受监管状态。请立即重启桌面。", onOK: {respring()}, noCancel: true)
                     }
                 })
                 .padding(10)
@@ -63,18 +63,18 @@ struct SuperviseView: View {
                 .cornerRadius(8)
                 .foregroundColor(.black)
                 Button("Unsupervise", action : {
-                    UIApplication.shared.confirmAlert(title: "Warning", body: "Unsupervising could break some configuration profiles. Are you sure you want to continue ?", onOK: {
+                    UIApplication.shared.confirmAlert(title: "警告", body: "解除监管可能破坏部分描述文件。确定继续吗？", onOK: {
                         print("Attempting to unsupervise")
                         FileManager.default.createFile(atPath: supervisePath, contents: nil)
                         plistContent = "<?xml version=\"1.0\" encoding=\"UTF-8\"?> <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"> <plist version=\"1.0\"> <dict> <key>AllowPairing</key> <true/> <key>CloudConfigurationUIComplete</key> <true/> <key>ConfigurationSource</key> <integer>0</integer> <key>IsSupervised</key> <false/> <key>PostSetupProfileWasInstalled</key> <true/> </dict> </plist>"
                         do {
                             try plistContent.write(to: URL(fileURLWithPath: "/var/containers/Shared/SystemGroup/systemgroup.com.apple.configurationprofiles/Library/ConfigurationProfiles/CloudConfigurationDetails.plist"), atomically: true, encoding: .utf8)
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                            UIApplication.shared.confirmAlert(title: "Done !", body: "Please respring your device.", onOK: {respring()}, noCancel: true)
+                            UIApplication.shared.confirmAlert(title: "已完成！", body: "请重启设备桌面。", onOK: {respring()}, noCancel: true)
                         }
                         catch {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                            UIApplication.shared.confirmAlert(title: "Error", body: "The app encountered an error while writing to file. Respring anyway ?", onOK: {respring()}, noCancel: false, yes: true)
+                            UIApplication.shared.confirmAlert(title: "错误", body: "写入文件时出错。仍要重启桌面吗？", onOK: {respring()}, noCancel: false, yes: true)
                         }
                     }, noCancel: false)
                 })
@@ -85,7 +85,7 @@ struct SuperviseView: View {
             }
             .toolbar{
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Text("Superviser")
+                    Text("监管模式")
                         .font(.title2)
                         .bold()
                 }

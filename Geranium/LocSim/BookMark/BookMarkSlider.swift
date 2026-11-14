@@ -38,7 +38,7 @@ struct BookMarkSlider: View {
                         close()
                         LocSimManager.startLocSim(location: CLLocation(coordinate: CLLocationCoordinate2D(latitude: bookmark.lat, longitude: bookmark.long), altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date()))
                         AlertKitAPI.present(
-                            title: "Started !",
+                            title: "已开始模拟",
                             icon: .done,
                             style: .iOS17AppleMusic,
                             haptic: .success
@@ -48,7 +48,7 @@ struct BookMarkSlider: View {
                             Text("\(bookmark.name)")
                                 .font(.headline)
                                 .foregroundColor(.primary)
-                            Text("Latitude: \(bookmark.lat) Longitude: \(bookmark.long)")
+                            Text("纬度: \(bookmark.lat) 经度: \(bookmark.long)")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
                         }
@@ -59,7 +59,7 @@ struct BookMarkSlider: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Text("Bookmarks")
+                    Text("书签")
                         .font(.title2)
                         .bold()
                 }
@@ -67,7 +67,7 @@ struct BookMarkSlider: View {
                     Button(action: {
                         if lat != 0.00 && long != 0.00 {
                             UIApplication.shared.TextFieldAlert(
-                                title: "Enter bookmark name",
+                                title: "输入书签名称",
                                 textFieldPlaceHolder: "Example..."
                             ) { enteredText, _ in
                                 let bookmarkName = enteredText ?? "Unknown"
@@ -81,8 +81,8 @@ struct BookMarkSlider: View {
                             }
 
                         } else {
-                            UIApplication.shared.confirmAlert(title: "Your position is set to 0", body: "Are you sure you want to continue? This might be a mistake; try picking somewhere on the map", onOK: {
-                                UIApplication.shared.TextFieldAlert(title: "Enter bookmark name", textFieldPlaceHolder: "Example...", completion: { enteredText, _ in
+                            UIApplication.shared.confirmAlert(title: "当前位置为 0", body: "确定继续吗？这可能是个失误；建议在地图上选一个位置", onOK: {
+                                UIApplication.shared.TextFieldAlert(title: "输入书签名称", textFieldPlaceHolder: "Example...", completion: { enteredText, _ in
                                     result = BookMarkSave(lat: lat, long: long, name: enteredText ?? "Unknown")
                                     bookmarks = BookMarkRetrieve().compactMap { dict in
                                         guard let name = dict["name"] as? String,
@@ -91,7 +91,7 @@ struct BookMarkSlider: View {
                                         return Bookmark(name: name, lat: lat, long: long)
                                     }
                                     AlertKitAPI.present(
-                                        title: "Added !",
+                                        title: "已添加！",
                                         icon: .done,
                                         style: .iOS17AppleMusic,
                                         haptic: .success
@@ -111,12 +111,12 @@ struct BookMarkSlider: View {
                     Group {
                         if bookmarks.isEmpty {
                             VStack {
-                                Text("No bookmarks saved.")
+                                Text("还没有书签")
                                     .foregroundColor(.secondary)
                                     .font(.title)
                                     .padding()
                                     .multilineTextAlignment(.center)
-                                Text("To add a bookmark, select a custom location then tap the + button.")
+                                Text("添加书签：先在地图上选一个位置，然后点 + 按钮。")
                                     .foregroundColor(.secondary)
                                     .font(.footnote)
                                     .multilineTextAlignment(.center)
@@ -127,7 +127,7 @@ struct BookMarkSlider: View {
                 )
             .onAppear {
                 if isThereAnyMika(), !isMika {
-                    UIApplication.shared.confirmAlert(title:"Mika's LocSim bookmarks/records detected.", body: "Do you want to import them ?", onOK: {
+                    UIApplication.shared.confirmAlert(title:"Mika's LocSim bookmarks/records detected.", body: "要导入它们吗？", onOK: {
                         importMika()
                         bookmarks = BookMarkRetrieve().compactMap { dict in
                             guard let name = dict["name"] as? String,
@@ -146,7 +146,7 @@ struct BookMarkSlider: View {
         bookmarks.remove(atOffsets: offsets)
         updateBookmarks()
         AlertKitAPI.present(
-            title: "Deleted !",
+            title: "已删除！",
             icon: .done,
             style: .iOS17AppleMusic,
             haptic: .success

@@ -47,14 +47,14 @@ struct HomeView: View {
                         
                         // MARK: - Feature Stats Card
                         HStack(spacing: 15) {
-                            statItem(title: "Status", value: "Verified", icon: "checkmark.shield.fill", color: .green)
-                            statItem(title: "Version", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")-Pro", icon: "cpu", color: .indigo)
+                            statItem(title: "状态", value: "Verified", icon: "checkmark.shield.fill", color: .green)
+                            statItem(title: "版本", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")-Pro", icon: "cpu", color: .indigo)
                         }
                         .padding(.horizontal)
                         
                         // MARK: - Main Actions
                         VStack(spacing: 12) {
-                            Text("CREDITS & CONTRIBUTORS")
+                            Text("致谢与贡献者")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -71,7 +71,7 @@ struct HomeView: View {
                         Button(action: { respring() }) {
                             HStack {
                                 Image(systemName: "restart.circle.fill")
-                                Text("Respring Device")
+                                Text("重启桌面（Respring）")
                             }
                             .font(.headline)
                             .foregroundColor(.white)
