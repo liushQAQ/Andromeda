@@ -88,6 +88,16 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var availableRoutes: [RouteOption] = []
     @Published var allRoutePolylines: [MKPolyline] = []
     @Published var selectedRouteIndex: Int = 0
+
+    // MARK: - DriftFix v2 自由路线 + 途径点
+    // 老总实测定案：内部道路/步行道不在 Apple 路网里，MKDirections 会把 A/B 强制吸附到
+    // 最近的可导航点再算路——看起来像"漂移"，实为路网吸附替换。
+    // ① 自由路线(.free)：完全不经过导航引擎，用户点列依序直线插值，点在哪轨迹就在哪；
+    // ② 道路导航(.road)：MKDirections 不支持多途径点（Apple API 限制），A→B、B→C 分段
+    //    链式算路拼接，每个用户指定的点都是一段的精确起终点。
+    @Published var routeMode: RouteMode = .road
+    @Published var userWaypoints: [CLLocationCoordinate2D] = []   // 用户点列(GCJ 显示系)，顺序=起→途经→终
+    @Published var pickingOnMap: Bool = false                     // 「地图选点添加途经点」开关（LocSimView 据此改写点按行为）
     
     private var routePoints: [CLLocationCoordinate2D] = []
     private var timer: Timer? = nil
@@ -214,6 +224,162 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     private func distanceBetween(_ c1: CLLocationCoordinate2D, _ c2: CLLocationCoordinate2D) -> Double {
         return CLLocation(latitude: c1.latitude, longitude: c1.longitude).distance(from: CLLocation(latitude: c2.latitude, longitude: c2.longitude))
+    }
+
+    // MARK: - DriftFix v2 路线模式与点列管理
+
+    enum RouteMode: String, CaseIterable, Identifiable {
+        case road = "road"
+        case free = "free"
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .road: return "道路导航"
+            case .free: return "自由路线"
+            }
+        }
+    }
+
+    /// 起点卡：设 userWaypoints[0]（保留已有途经点）。
+    func setStart(_ coord: CLLocationCoordinate2D) {
+        if userWaypoints.isEmpty { userWaypoints = [coord] } else { userWaypoints[0] = coord }
+    }
+
+    /// 终点卡：设最后一个点（保留已有途经点）。
+    func setEnd(_ coord: CLLocationCoordinate2D) {
+        if userWaypoints.count < 2 { userWaypoints.append(coord) } else { userWaypoints[userWaypoints.count - 1] = coord }
+    }
+
+    /// 地图选点添加：插入在终点之前（终点保持收尾）。
+    func addPickedWaypoint(_ coord: CLLocationCoordinate2D) {
+        if userWaypoints.count < 2 { userWaypoints.append(coord) }
+        else { userWaypoints.insert(coord, at: userWaypoints.count - 1) }
+    }
+
+    func removeWaypoint(at index: Int) {
+        guard userWaypoints.indices.contains(index) else { return }
+        userWaypoints.remove(at: index)
+    }
+
+    /// 自由路线：完全不经过导航引擎。用户点列(GCJ)依序直线插值 → routePoints。
+    /// polylineIsWGS=false → updateLocation 逐点 GCJ→WGS 注入（与地图点选单点同一条正确路径）；
+    /// 显示线 = 用户点原样连线（GCJ 画在 GCJ 瓦片上：零偏移、零吸附，内部道路随便走）。
+    func buildFreeRoute(speedMult: Double) {
+        guard userWaypoints.count >= 2 else { return }
+        let effectiveSpeed = max(travelMode.speed * speedMult, 0.2)
+        polylineIsWGS = false
+        routePoints = interpolateRoute(coords: userWaypoints, speed: effectiveSpeed, interval: updateInterval)
+        totalPoints = routePoints.count
+        currentPointIndex = 0
+        progress = 0.0
+        isSimulating = false
+        isPaused = false
+        currentPosition = nil
+        availableRoutes = []
+        allRoutePolylines = []
+        routePolyline = MKPolyline(coordinates: userWaypoints, count: userWaypoints.count)
+        var totalMeters: Double = 0
+        for i in 1..<userWaypoints.count {
+            totalMeters += distanceBetween(userWaypoints[i - 1], userWaypoints[i])
+        }
+        let secs = totalMeters / effectiveSpeed
+        let m = Int(secs) / 60
+        estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+    }
+
+    /// 道路导航 + 任意多途径点：MKDirections 不支持多途经点，按 A→B、B→C… 分段链式算路拼接。
+    /// 任一段无导航路线 → 直接失败并提示改用自由路线（绝不做路网吸附替换——这就是本修复要根除的行为）。
+    func calculateFlexibleRoute(points: [CLLocationCoordinate2D], mode: TravelMode, speedMult: Double, completion: @escaping (Bool, String?) -> Void) {
+        guard points.count >= 2 else { completion(false, "至少需要起点和终点两个点"); return }
+        isCalculatingRoute = true
+        travelMode = mode
+        speedMultiplier = speedMult
+        availableRoutes = []
+        allRoutePolylines = []
+        selectedRouteIndex = 0
+
+        let legs = zip(points, points.dropFirst()).map { (from: $0.0, to: $0.1) }
+        var rawCoords: [CLLocationCoordinate2D] = []      // 注入用（保持返回坐标系）
+        var displayCoords: [CLLocationCoordinate2D] = []  // 显示用（GCJ）
+        var totalDistance: Double = 0
+        var detectedWGS: Bool? = nil
+        var firstError: String? = nil
+
+        func runLeg(_ idx: Int) {
+            if idx >= legs.count {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.isCalculatingRoute = false
+                    if let err = firstError {
+                        completion(false, err)
+                        return
+                    }
+                    self.polylineIsWGS = detectedWGS ?? false
+                    self.requestStartCoord = points.first
+                    let eff = max(self.travelMode.speed * speedMult, 0.2)
+                    self.routePoints = self.interpolateRoute(coords: rawCoords, speed: eff, interval: self.updateInterval)
+                    self.totalPoints = self.routePoints.count
+                    self.currentPointIndex = 0
+                    self.progress = 0.0
+                    self.isSimulating = false
+                    self.isPaused = false
+                    self.currentPosition = nil
+                    if displayCoords.count >= 2 {
+                        self.routePolyline = MKPolyline(coordinates: displayCoords, count: displayCoords.count)
+                    }
+                    let secs = totalDistance / eff
+                    let m = Int(secs) / 60
+                    self.estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+                    completion(true, nil)
+                }
+                return
+            }
+            let leg = legs[idx]
+            let request = MKDirections.Request()
+            request.source = MKMapItem(placemark: MKPlacemark(coordinate: leg.from))
+            request.destination = MKMapItem(placemark: MKPlacemark(coordinate: leg.to))
+            request.transportType = mode.transportType
+            request.requestsAlternateRoutes = false
+            let directions = MKDirections(request: request)
+            directions.calculate { [weak self] response, error in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if let error = error {
+                        if firstError == nil { firstError = "第 \(idx + 1) 段算路失败: \(error.localizedDescription)" }
+                        runLeg(idx + 1)
+                        return
+                    }
+                    guard let routes = response?.routes, let best = routes.first, best.polyline.pointCount >= 2 else {
+                        if firstError == nil {
+                            firstError = "第 \(idx + 1) 段无导航路线（内部道路/步行道不在路网）——请改用「自由路线」模式"
+                        }
+                        runLeg(idx + 1)
+                        return
+                    }
+                    let pc = best.polyline.pointCount
+                    var coords = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: pc)
+                    best.polyline.getCoordinates(&coords, range: NSRange(location: 0, length: pc))
+                    if detectedWGS == nil, let first = coords.first {
+                        let d = CLLocation(latitude: first.latitude, longitude: first.longitude)
+                            .distance(from: CLLocation(latitude: leg.from.latitude, longitude: leg.from.longitude))
+                        detectedWGS = d > 200.0
+                    }
+                    rawCoords += coords
+                    if detectedWGS == true {
+                        displayCoords += coords.map { CoordTransform.wgs84ToGcj02($0) }
+                    } else {
+                        displayCoords += coords
+                    }
+                    if idx + 1 < legs.count && rawCoords.count > 1 {
+                        rawCoords.removeLast()
+                        displayCoords.removeLast()
+                    }
+                    totalDistance += best.distance
+                    runLeg(idx + 1)
+                }
+            }
+        }
+        runLeg(0)
     }
     
     func startSimulation(altitude: Double = 0.0) {

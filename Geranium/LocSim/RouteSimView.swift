@@ -12,8 +12,6 @@ struct RouteSimSheet: View {
     
     @State private var startText: String = ""
     @State private var endText: String = ""
-    @State private var startCoord: CLLocationCoordinate2D? = nil
-    @State private var endCoord: CLLocationCoordinate2D? = nil
     @State private var selectedMode: TravelMode = .driving
     @State private var isSearchingStart: Bool = false
     @State private var isSearchingEnd: Bool = false
@@ -45,7 +43,7 @@ struct RouteSimSheet: View {
                             text: $startText,
                             isSearching: isSearchingStart,
                             results: startResults,
-                            selectedCoord: startCoord,
+                            selectedCoord: routeSimulator.userWaypoints.first,
                             field: .start
                         )
                         
@@ -62,9 +60,15 @@ struct RouteSimSheet: View {
                             text: $endText,
                             isSearching: isSearchingEnd,
                             results: endResults,
-                            selectedCoord: endCoord,
+                            selectedCoord: (routeSimulator.userWaypoints.count >= 2 ? routeSimulator.userWaypoints.last : nil),
                             field: .end
                         )
+
+                        // MARK: - DriftFix v2 途经点（数量不限，地图选点/搜索均可）
+                        waypointsSection
+
+                        // MARK: - DriftFix v2 线路模式
+                        routeModeSection
                         
                         // MARK: - Travel Mode
                         VStack(alignment: .leading, spacing: 8) {
@@ -139,13 +143,13 @@ struct RouteSimSheet: View {
                                     .padding()
                                     .background(
                                         RoundedRectangle(cornerRadius: 14)
-                                            .fill((startCoord != nil && endCoord != nil) ?
+                                            .fill(routeSimulator.userWaypoints.count >= 2 ?
                                                   Color.indigo : Color.gray)
                                     )
                                     .foregroundColor(.white)
                                     .font(.headline)
                                 }
-                        .disabled(startCoord == nil || endCoord == nil || routeSimulator.isCalculatingRoute)
+                        .disabled(routeSimulator.userWaypoints.count < 2 || routeSimulator.isCalculatingRoute)
                         .padding(.horizontal)
                         
                         // MARK: - Route Selection (shown after calculation)
@@ -253,8 +257,7 @@ struct RouteSimSheet: View {
                     let coords = result.allCoordinates.map { CoordTransform.wgs84ToGcj02($0) }
                     if coords.count >= 2 {
                         // Use first and last as start/end
-                        startCoord = coords.first
-                        endCoord = coords.last
+                        routeSimulator.userWaypoints = [coords.first ?? CLLocationCoordinate2D(), coords.last ?? CLLocationCoordinate2D()]
                         startText = "GPX Start"
                         endText = "GPX End (\(coords.count) points)"
                         
@@ -270,7 +273,117 @@ struct RouteSimSheet: View {
                     }
                 }
             }
+            .onDisappear {
+                routeSimulator.pickingOnMap = false
+            }
         }
+    }
+
+    // MARK: - DriftFix v2 线路模式选择
+    private var routeModeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Route Mode 线路模式")
+                .font(.headline)
+                .padding(.horizontal)
+            HStack(spacing: 12) {
+                ForEach(RouteSimulator.RouteMode.allCases) { m in
+                    Button(action: {
+                        routeSimulator.routeMode = m
+                        routeReady = false
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: m == .road ? "road.lanes" : "point.topleft.down.to.point.bottomright.curvepath")
+                            Text(m.label).font(.caption)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(routeSimulator.routeMode == m ?
+                                      Color.indigo.opacity(0.2) :
+                                      Color(UIColor.secondarySystemBackground))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(routeSimulator.routeMode == m ? Color.indigo : Color.clear, lineWidth: 2)
+                        )
+                    }
+                    .foregroundColor(routeSimulator.routeMode == m ? .indigo : .primary)
+                }
+            }
+            .padding(.horizontal)
+            Text(routeSimulator.routeMode == .free
+                 ? "自由路线：按你选的点依序直线连接，完全不吸附路网——内部道路/园区/步行道随便走。"
+                 : "道路导航：走真实路网；某段没有导航路线会直接报错，请改用自由路线（不再偷偷吸附替换）。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+        }
+    }
+
+    // MARK: - DriftFix v2 途经点管理
+    private var waypointsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "mappin.and.ellipse")
+                    .foregroundColor(.accentColor)
+                Text("Waypoints 途经点")
+                    .font(.headline)
+                Spacer()
+                Text("\(routeSimulator.userWaypoints.count) pts")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+
+            Button(action: { routeSimulator.pickingOnMap.toggle() }) {
+                HStack {
+                    Image(systemName: routeSimulator.pickingOnMap ? "checkmark.circle.fill" : "hand.tap")
+                    Text(routeSimulator.pickingOnMap
+                         ? "地图选点：开——点地图任意位置即添加途经点"
+                         : "地图选点：关（当前点地图=立即模拟）")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(routeSimulator.pickingOnMap ?
+                              Color.green.opacity(0.18) :
+                              Color(UIColor.secondarySystemBackground))
+                )
+            }
+            .padding(.horizontal)
+
+            if routeSimulator.userWaypoints.count > 2 {
+                ForEach(1..<(routeSimulator.userWaypoints.count - 1), id: \.self) { idx in
+                    HStack {
+                        Image(systemName: "mappin")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("途经点 \(idx)")
+                            .font(.subheadline)
+                        Spacer()
+                        Text(String(format: "%.4f, %.4f",
+                                    routeSimulator.userWaypoints[idx].latitude,
+                                    routeSimulator.userWaypoints[idx].longitude))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Button(action: {
+                            routeSimulator.removeWaypoint(at: idx)
+                            routeReady = false
+                        }) {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
     }
     
     // MARK: - Route Option Card
@@ -597,25 +710,33 @@ struct RouteSimSheet: View {
     
     private func selectLocation(_ item: MKMapItem, field: ActiveField) {
         let coord = item.placemark.coordinate
-        
+
         if field == .start {
-            startCoord = coord
+            routeSimulator.setStart(coord)
             startText = item.name ?? "Selected"
             startResults = []
         } else {
-            endCoord = coord
+            routeSimulator.setEnd(coord)
             endText = item.name ?? "Selected"
             endResults = []
         }
-        
+
         activeField = .none
         routeReady = false
     }
     
     private func calculateRoute() {
-        guard let start = startCoord, let end = endCoord else { return }
-        
-        routeSimulator.calculateRoutes(from: start, to: end, mode: selectedMode, speedMult: speedMultiplier) { success, error in
+        guard routeSimulator.userWaypoints.count >= 2 else { return }
+
+        if routeSimulator.routeMode == .free {
+            // DriftFix v2: 自由路线——不经过导航引擎，点在哪轨迹在哪（内部道路/园区可用）
+            routeSimulator.travelMode = selectedMode
+            routeSimulator.buildFreeRoute(speedMult: speedMultiplier)
+            routeReady = true
+            showRouteOnMap()
+            return
+        }
+        routeSimulator.calculateFlexibleRoute(points: routeSimulator.userWaypoints, mode: selectedMode, speedMult: speedMultiplier) { success, error in
             if success {
                 routeReady = true
                 showRouteOnMap()
