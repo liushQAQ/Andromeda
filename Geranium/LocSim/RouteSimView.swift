@@ -3,6 +3,7 @@
 
 import SwiftUI
 import MapKit
+import UIKit
 import AlertKit
 
 struct RouteSimSheet: View {
@@ -21,7 +22,22 @@ struct RouteSimSheet: View {
     @State private var routeReady: Bool = false
     @State private var speedMultiplier: Double = 1.0
     @State private var showGPXPicker: Bool = false
-    @State private var savedRoutes: [URL] = RouteSimulator.listSavedRoutes()
+    @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
+    @State private var savedRoutes: [RouteSimulator.SavedRouteInfo] = []
+    @State private var shareItem: ShareItem? = nil
+
+    struct ShareItem: Identifiable {
+        let url: URL
+        var id: String { url.path }
+    }
+
+    private var savedSort: RouteSimulator.SavedSort {
+        RouteSimulator.SavedSort(rawValue: savedSortRaw) ?? .dateDesc
+    }
+
+    private func refreshSavedRoutes() {
+        savedRoutes = RouteSimulator.savedRouteInfos(sort: savedSort)
+    }
     
     enum ActiveField {
         case none, start, end
@@ -275,6 +291,12 @@ struct RouteSimSheet: View {
             }
             .onDisappear {
                 routeSimulator.pickingOnMap = false
+            }
+            .onAppear {
+                refreshSavedRoutes()
+            }
+            .sheet(item: $shareItem) { item in
+                ActivityShareSheet(items: [item.url])
             }
         }
     }
@@ -755,7 +777,7 @@ struct RouteSimSheet: View {
         }
     }
 
-    // MARK: - Saved Routes (DriftFix)
+    // MARK: - Saved Routes (DriftFix v2.5: 管理=载入/重命名/删除/排序/分享导出)
     private var savedRoutesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -764,7 +786,20 @@ struct RouteSimSheet: View {
                 Text("Saved Routes")
                     .font(.headline)
                 Spacer()
-                Button(action: { savedRoutes = RouteSimulator.listSavedRoutes() }) {
+                Text("\(savedRoutes.count) 条")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button(action: {
+                    savedSortRaw = nextSort().rawValue
+                    refreshSavedRoutes()
+                }) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.up.arrow.down")
+                        Text(savedSort.rawValue)
+                    }
+                    .font(.caption)
+                }
+                Button(action: refreshSavedRoutes) {
                     Image(systemName: "arrow.clockwise")
                         .foregroundColor(.accentColor)
                 }
@@ -772,29 +807,52 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
 
             if savedRoutes.isEmpty {
-                Text("No saved routes. Calculate a route then tap Save Route.")
+                Text("暂无保存线路。算好路线点 Save Route，即可在这里载入/重命名/删除/排序/分享导出。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal)
             } else {
-                ForEach(savedRoutes, id: \.self) { url in
-                    Button(action: { loadSavedRoute(url) }) {
-                        HStack {
-                            Image(systemName: "figure.walk.circle.fill")
-                                .foregroundColor(.green)
-                            Text(url.deletingPathExtension().lastPathComponent)
-                                .font(.subheadline)
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                ForEach(savedRoutes) { info in
+                    HStack(spacing: 8) {
+                        Button(action: { loadSavedRoute(info) }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "figure.walk.circle.fill")
+                                    .foregroundColor(.green)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(info.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    Text("\(fmtDate(info.date)) · \(max(1, info.sizeBytes / 1024)) KB")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
                         }
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
+                        .buttonStyle(.plain)
+                        Spacer()
+                        Button(action: { shareItem = ShareItem(url: info.url) }) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 15))
+                                .foregroundColor(.accentColor)
+                        }
+                        .padding(.horizontal, 3)
+                        Button(action: { renameRoute(info) }) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 15))
+                                .foregroundColor(.orange)
+                        }
+                        .padding(.horizontal, 3)
+                        Button(action: { deleteRoute(info) }) {
+                            Image(systemName: "trash.fill")
+                                .font(.system(size: 15))
+                                .foregroundColor(.red)
+                        }
+                        .padding(.horizontal, 3)
                     }
-                    Divider().padding(.leading, 44)
+                    .padding(.horizontal)
+                    .padding(.vertical, 4)
+                    Divider().padding(.leading, 36)
                 }
             }
         }
@@ -802,6 +860,49 @@ struct RouteSimSheet: View {
         .background(.ultraThinMaterial)
         .cornerRadius(16)
         .padding(.horizontal)
+    }
+
+    private func nextSort() -> RouteSimulator.SavedSort {
+        let all = RouteSimulator.SavedSort.allCases
+        guard let i = all.firstIndex(of: savedSort) else { return .dateDesc }
+        return all[(i + 1) % all.count]
+    }
+
+    private func fmtDate(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: d)
+    }
+
+    private func renameRoute(_ info: RouteSimulator.SavedRouteInfo) {
+        UIApplication.shared.TextFieldAlert(
+            title: "重命名线路",
+            textFieldPlaceHolder: info.name
+        ) { text, _ in
+            guard let newName = text, !newName.isEmpty else { return }
+            if RouteSimulator.renameSavedRoute(at: info.url, to: newName) != nil {
+                refreshSavedRoutes()
+                AlertKitAPI.present(title: "Renamed!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+            } else {
+                UIApplication.shared.alert(body: "重命名失败")
+            }
+        }
+    }
+
+    private func deleteRoute(_ info: RouteSimulator.SavedRouteInfo) {
+        UIApplication.shared.confirmAlert(
+            title: "删除线路",
+            body: "确定删除「\(info.name)」？此操作不可恢复。",
+            onOK: {
+                if RouteSimulator.deleteSavedRoute(at: info.url) {
+                    refreshSavedRoutes()
+                    AlertKitAPI.present(title: "Deleted!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+                } else {
+                    UIApplication.shared.alert(body: "删除失败")
+                }
+            },
+            noCancel: false
+        )
     }
 
     private func saveCurrentRoute() {
@@ -819,8 +920,8 @@ struct RouteSimSheet: View {
         }
     }
 
-    private func loadSavedRoute(_ url: URL) {
-        if routeSimulator.loadSavedRoute(at: url) {
+    private func loadSavedRoute(_ info: RouteSimulator.SavedRouteInfo) {
+        if routeSimulator.loadSavedRoute(at: info.url) {
             routeReady = true
             if let poly = routeSimulator.routePolyline {
                 let rect = poly.boundingMapRect
@@ -842,4 +943,15 @@ struct RouteSimSheet: View {
             haptic: .success
         )
     }
+}
+
+// MARK: - DriftFix v2.5: 系统分享面板（线路 GPX 导出：存文件/AirDrop/微信等）
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

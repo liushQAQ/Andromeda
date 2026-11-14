@@ -572,6 +572,70 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return true
     }
 
+    // MARK: - DriftFix v2.5 线路管理（重命名/删除/排序/分享导出）
+    struct SavedRouteInfo: Identifiable {
+        let url: URL
+        let name: String
+        let date: Date
+        let sizeBytes: Int
+        var id: String { url.lastPathComponent }
+    }
+
+    enum SavedSort: String, CaseIterable {
+        case dateDesc = "时间↓"
+        case dateAsc = "时间↑"
+        case nameAsc = "名称A-Z"
+        case nameDesc = "名称Z-A"
+    }
+
+    static func savedRouteInfos(sort: SavedSort) -> [SavedRouteInfo] {
+        let fm = FileManager.default
+        let infos = listSavedRoutes().compactMap { url -> SavedRouteInfo? in
+            guard let st = try? fm.attributesOfItem(atPath: url.path) else { return nil }
+            let date = (st[.modificationDate] as? Date) ?? Date.distantPast
+            let size = (st[.size] as? Int) ?? 0
+            return SavedRouteInfo(url: url, name: url.deletingPathExtension().lastPathComponent, date: date, sizeBytes: size)
+        }
+        switch sort {
+        case .dateDesc: return infos.sorted { $0.date > $1.date }
+        case .dateAsc: return infos.sorted { $0.date < $1.date }
+        case .nameAsc: return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .nameDesc: return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
+        }
+    }
+
+    static func deleteSavedRoute(at url: URL) -> Bool {
+        do {
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 重命名（目标同名自动加 (2)(3)… 后缀，绝不覆盖别人的线路）。
+    static func renameSavedRoute(at url: URL, to rawName: String) -> URL? {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        let safe = name
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: "?", with: "_")
+        var target = routesDirectory().appendingPathComponent(safe + ".gpx")
+        var n = 2
+        while FileManager.default.fileExists(atPath: target.path)
+                && target.standardizedFileURL.path != url.standardizedFileURL.path {
+            target = routesDirectory().appendingPathComponent("\(safe) (\(n)).gpx")
+            n += 1
+        }
+        do {
+            try FileManager.default.moveItem(at: url, to: target)
+            return target
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Background Task Management
     private func startBackgroundTask() {
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "RouteSimulation") { [weak self] in
