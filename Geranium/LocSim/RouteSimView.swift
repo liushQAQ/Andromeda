@@ -225,7 +225,8 @@ struct RouteSimSheet: View {
                         return
                     }
                     
-                    let coords = result.allCoordinates
+                    // DriftFix: GPX 是真实轨迹(WGS-84)；地图/算路请求统一用 GCJ-02（与搜索结果同一基准）
+                    let coords = result.allCoordinates.map { CoordTransform.wgs84ToGcj02($0) }
                     if coords.count >= 2 {
                         // Use first and last as start/end
                         startCoord = coords.first

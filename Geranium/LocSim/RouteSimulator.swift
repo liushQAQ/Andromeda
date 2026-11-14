@@ -94,6 +94,14 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var altitude: Double = 0.0
     private var speedMultiplier: Double = 1.0
     private let updateInterval: TimeInterval = 1.0
+
+    // MARK: - DriftFix 坐标基准自动判定
+    // 搜索结果/地图瓦片 = GCJ-02（实测：搜索 pin 落点正确）；
+    // 中国大陆 MKDirections 返回的 polyline = WGS-84 真坐标（实测：一点 Calculate Routes 路线整体偏移）。
+    // 判据 = polyline 首点与请求起点(GCJ) 的距离：>200m 判为 WGS。
+    // 判为 WGS 时：注入直接用 polyline 原始点（避免 gcj02ToWgs84 双重转换）；地图显示层转 GCJ。
+    private var polylineIsWGS = false
+    private var requestStartCoord: CLLocationCoordinate2D? = nil
     
     // Background handling
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -133,7 +141,24 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                     return
                 }
                 self?.availableRoutes = routes.enumerated().map { RouteOption(route: $0.element, index: $0.offset) }
-                self?.allRoutePolylines = routes.map { $0.polyline }
+
+                // DriftFix: 判定 polyline 基准（WGS-84 vs GCJ-02）
+                var isWGS = false
+                if let firstRoute = routes.first {
+                    let firstCoords = CoordTransform.polylineCoordinates(firstRoute.polyline)
+                    if let first = firstCoords.first {
+                        let d = CLLocation(latitude: first.latitude, longitude: first.longitude)
+                            .distance(from: CLLocation(latitude: start.latitude, longitude: start.longitude))
+                        isWGS = d > 200.0
+                    }
+                }
+                self?.polylineIsWGS = isWGS
+                self?.requestStartCoord = start
+
+                // DriftFix: 显示用 polyline 转 GCJ（WGS 线画在 GCJ 瓦片上会整体偏移）
+                self?.allRoutePolylines = routes.map {
+                    isWGS ? CoordTransform.displayPolyline($0.polyline) : $0.polyline
+                }
                 self?.selectRoute(at: 0)
                 completion(true, nil)
             }
@@ -152,7 +177,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let effectiveSpeed = travelMode.speed * speedMultiplier
         routePoints = interpolateRoute(coords: coords, speed: effectiveSpeed, interval: updateInterval)
         totalPoints = routePoints.count
-        routePolyline = route.polyline
+        // DriftFix: 显示用副本转 GCJ；注入点(routePoints)保持 polyline 原始坐标
+        routePolyline = polylineIsWGS ? CoordTransform.displayPolyline(route.polyline) : route.polyline
         
         let totalDistance = route.distance
         let timeSeconds = totalDistance / effectiveSpeed
@@ -286,11 +312,14 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         coord.latitude += latJitter
         coord.longitude += lngJitter
         
+        // DriftFix: 显示层坐标 —— polyline 判为 WGS 时转 GCJ，否则原样
+        let displayCoord = polylineIsWGS ? CoordTransform.wgs84ToGcj02(coord) : coord
         DispatchQueue.main.async { [weak self] in
-            self?.currentPosition = coord
+            self?.currentPosition = displayCoord
         }
-        
-        let wgsCoord = CoordTransform.gcj02ToWgs84(coord)
+
+        // DriftFix: 注入坐标 —— polyline 判为 WGS 时直接用原始点（避免 GCJ→WGS 双重转换）
+        let wgsCoord = polylineIsWGS ? coord : CoordTransform.gcj02ToWgs84(coord)
         let location = CLLocation(
             coordinate: wgsCoord,
             altitude: altitude + Double.random(in: -0.5...0.5), // Slight altitude jitter

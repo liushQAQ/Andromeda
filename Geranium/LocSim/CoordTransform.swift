@@ -7,9 +7,30 @@
 
 import CoreLocation
 import Foundation
+import MapKit
 
 /// A utility for converting coordinates between WGS-84 and GCJ-02.
 struct CoordTransform {
+
+    // MARK: - DriftFix polyline helpers
+
+    /// 提取 MKPolyline 的全部坐标点。
+    static func polylineCoordinates(_ polyline: MKPolyline) -> [CLLocationCoordinate2D] {
+        let count = polyline.pointCount
+        guard count > 0 else { return [] }
+        var coords = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: count)
+        polyline.getCoordinates(&coords, range: NSRange(location: 0, length: count))
+        return coords
+    }
+
+    /// DriftFix: 生成"显示用"的 GCJ-02 polyline 副本。
+    /// 中国大陆 MKDirections 返回的 polyline 是 WGS-84，直接画在 GCJ 瓦片上整体偏移；
+    /// 显示前逐点 WGS→GCJ。境外坐标 isOutOfChina 自动原样返回，不影响海外使用。
+    static func displayPolyline(_ polyline: MKPolyline) -> MKPolyline {
+        let converted = polylineCoordinates(polyline).map { wgs84ToGcj02($0) }
+        guard converted.count > 1 else { return polyline }
+        return MKPolyline(coordinates: converted, count: converted.count)
+    }
 
     // MARK: - Geodetic Constants
 
