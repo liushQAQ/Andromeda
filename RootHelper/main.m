@@ -1,5 +1,5 @@
 #import <stdio.h>
-@import Foundation;
+#import <Foundation/Foundation.h>
 #import "uicache.h"
 #import <sys/stat.h>
 #import <dlfcn.h>

@@ -35,6 +35,9 @@ struct LocSimView: View {
     
     // App Profiles
     @State private var showAppProfiles: Bool = false
+
+    // DriftFix: 手动坐标输入
+    @State private var showManualCoord: Bool = false
     
     // Timer
     @State private var showTimerPicker: Bool = false
@@ -221,7 +224,7 @@ struct LocSimView: View {
                 let coord = CLLocationCoordinate2D(latitude: favLat, longitude: favLong)
                 let region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
                 mapRegion = region
-                startSimulation(at: coord, altitude: Double(altitude) ?? 0.0)
+                startSimulationFromWGS(at: coord, altitude: Double(altitude) ?? 0.0)
                 AlertKitAPI.present(title: "📍 \(name)", icon: .done, style: .iOS17AppleMusic, haptic: .success)
             }
         }
@@ -239,23 +242,45 @@ struct LocSimView: View {
                 let coord = CLLocationCoordinate2D(latitude: profLat, longitude: profLong)
                 let region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
                 mapRegion = region
-                startSimulation(at: coord, altitude: Double(altitude) ?? 0.0)
+                startSimulationFromWGS(at: coord, altitude: Double(altitude) ?? 0.0)
                 AlertKitAPI.present(title: name, icon: .done, style: .iOS17AppleMusic, haptic: .success)
             }
+        }
+        .sheet(isPresented: $showManualCoord) {
+            ManualCoordinateSheet(lat: $lat, long: $long, altitude: Double(altitude) ?? 0.0)
         }
     }
     
     private func startSimulation(at gcjCoordinate: CLLocationCoordinate2D, altitude: Double) {
         let wgsCoordinate = CoordTransform.gcj02ToWgs84(gcjCoordinate)
-        
+
         self.lat = wgsCoordinate.latitude
         self.long = wgsCoordinate.longitude
-        
+
         let location = CLLocation(coordinate: wgsCoordinate, altitude: altitude,horizontalAccuracy:5,verticalAccuracy: 5,timestamp: Date())
         LocSimManager.startLocSim(location: location)
-        
+
         joystickCoordinate = wgsCoordinate
-        
+
+        AlertKitAPI.present(
+            title: "Started!",
+            icon: .done,
+            style: .iOS17AppleMusic,
+            haptic: .success
+        )
+    }
+
+    /// DriftFix: 收藏/书签/App预设 存储的都是 WGS-84 真实坐标（startSimulation 写入的 lat/long），
+    /// 点击这些入口直接注入，绝不能再当 GCJ 二次转换（曾导致每次固定偏移 ~500m）。
+    private func startSimulationFromWGS(at wgsCoordinate: CLLocationCoordinate2D, altitude: Double) {
+        self.lat = wgsCoordinate.latitude
+        self.long = wgsCoordinate.longitude
+
+        let location = CLLocation(coordinate: wgsCoordinate, altitude: altitude, horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
+        LocSimManager.startLocSim(location: location)
+
+        joystickCoordinate = wgsCoordinate
+
         AlertKitAPI.present(
             title: "Started!",
             icon: .done,
@@ -342,6 +367,8 @@ struct LocSimView: View {
         switch action {
         case .search:
             showSearchBar.toggle()
+        case .manualCoord:
+            showManualCoord = true
         case .favorites:
             showFavorites.toggle()
         case .appProfiles:
@@ -394,6 +421,82 @@ struct LocSimView: View {
                 Circle()
                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
             )
+    }
+}
+
+// MARK: - DriftFix: 手动坐标输入（对齐 Geranium 任意坐标能力，Andromeda 原本只有搜索）
+struct ManualCoordinateSheet: View {
+    @Environment(\.dismiss) var dismiss
+    @Binding var lat: Double
+    @Binding var long: Double
+    var altitude: Double
+    @State private var latText: String = ""
+    @State private var longText: String = ""
+    @State private var datum: Datum = .gcj
+
+    enum Datum: String, CaseIterable, Identifiable {
+        case gcj = "地图/搜索 (GCJ-02)"
+        case wgs = "真实GPS/GPX (WGS-84)"
+        var id: String { rawValue }
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Coordinate")) {
+                    TextField("Latitude  例: 22.543210", text: $latText)
+                        .keyboardType(.numbersAndPunctuation)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                    TextField("Longitude  例: 114.123456", text: $longText)
+                        .keyboardType(.numbersAndPunctuation)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                }
+                Section(header: Text("Datum 坐标系"),
+                        footer: Text("从中国地图/搜索结果抄的选 GCJ-02；从 GPX/真实 GPS 抄的选 WGS-84。选错会固定偏几百米。")) {
+                    Picker("Datum", selection: $datum) {
+                        ForEach(Datum.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+                Section {
+                    Button(action: start) {
+                        Text("Simulate 模拟此坐标")
+                            .frame(maxWidth: .infinity)
+                            .font(.headline)
+                    }
+                    .disabled(!inputValid)
+                }
+            }
+            .navigationTitle("Manual Coordinate")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var inputValid: Bool {
+        guard let la = Double(latText), let lo = Double(longText) else { return false }
+        return abs(la) <= 90 && abs(lo) <= 180
+    }
+
+    private func start() {
+        guard let la = Double(latText), let lo = Double(longText) else { return }
+        var wgs = CLLocationCoordinate2D(latitude: la, longitude: lo)
+        if datum == .gcj {
+            wgs = CoordTransform.gcj02ToWgs84(wgs)
+        }
+        lat = wgs.latitude
+        long = wgs.longitude
+        let location = CLLocation(coordinate: wgs, altitude: altitude, horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
+        LocSimManager.startLocSim(location: location)
+        AlertKitAPI.present(title: "Started!", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        dismiss()
     }
 }
 

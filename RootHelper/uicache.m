@@ -1,5 +1,4 @@
-@import Foundation;
-@import CoreServices;
+#import <Foundation/Foundation.h>
 #import "CoreServices.h"
 #import <objc/runtime.h>
 #import "dlfcn.h"

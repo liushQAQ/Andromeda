@@ -14,32 +14,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install ldid
         run: brew install ldid
 
-      - name: Setup Theos + SDK（RootHelper 需要）
-        run: |
-          git clone --depth 1 https://github.com/theos/theos.git "$HOME/theos"
-          mkdir -p "$HOME/theos/sdks"
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/sdks
-          cd /tmp/sdks
-          git sparse-checkout set iPhoneOS16.5.sdk
-          cp -R iPhoneOS16.5.sdk "$HOME/theos/sdks/"
-          ls "$HOME/theos/sdks"
-
-      - name: Build RootHelper（Theos tool）
-        env:
-          THEOS: /Users/runner/theos
-        run: |
-          cd RootHelper
-          make clean
-          make
-          ls -la .theos/obj/debug/GeraniumRootHelper
-
-      - name: Build App（免签）
+      - name: Build App（免签，纯 Apple SDK）
         run: |
           xcodebuild -project Geranium.xcodeproj -scheme Geranium \
             -configuration Debug \
@@ -47,14 +26,16 @@ jobs:
             -destination 'generic/platform=iOS' \
             ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
 
-      - name: Assemble TIPA（复刻 ipabuild.sh，去签名+entitlements+RootHelper）
+      - name: Assemble TIPA（免签 + ldid entitlements + 官方 2.5.2 RootHelper 二进制）
         run: |
           APP_SRC="build/DerivedData/Build/Products/Debug-iphoneos/Geranium.app"
           test -d "$APP_SRC"
           cp -R "$APP_SRC" build/Geranium.app
           codesign --remove build/Geranium.app || true
           rm -rf build/Geranium.app/_CodeSignature build/Geranium.app/embedded.mobileprovision
-          cp RootHelper/.theos/obj/debug/GeraniumRootHelper build/Geranium.app/GeraniumRootHelper
+          # RootHelper 预编译二进制（取自官方 Son3ra1n/Andromeda v2.5.2 发布包，GPL-3.0；
+          # 本项目改动全在 App 侧 Swift，helper 无改动原样复用）
+          cp RootHelper/prebuilt/GeraniumRootHelper build/Geranium.app/GeraniumRootHelper
           ldid -Sentitlements.plist build/Geranium.app/Geranium
           ldid -S"Bookmark Location in Geranium/entitlements.plist" \
             "build/Geranium.app/PlugIns/Bookmark Location in Geranium.appex/Bookmark Location in Geranium"
@@ -81,10 +62,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.5.3-driftfix1
-          name: "Andromeda 2.5.3-driftfix1（单点保活治漂移）"
+          name: "Andromeda 2.5.3-driftfix1（单点保活治漂移 + 路线坐标系修正 + 手动坐标）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
-            改动：LocSimManager 单点注入后每 0.75s 保活重注入（原实现只注入一个静止点永不更新，locationd 融合定位与静止假点打架导致漂移）；路线跑完后终点继续保活。
+            1. LocSimManager 单点注入后每 0.75s 保活重注入，压住 locationd 融合定位拉扯（单点漂移根治）；路线终点继续保活。
+            2. MKRoute polyline 基准自动判定（中国大陆返回 WGS-84）：显示转 GCJ 贴回真实道路，注入免 GCJ→WGS 双重转换。
+            3. 收藏/App预设 点击模拟不再二次转换（原实现存 WGS 当 GCJ 转 → 固定偏 ~500m）。
+            4. 新增手动坐标输入（GCJ/WGS 可选基准），对齐 Geranium 能力。
+            5. GPX 导入转 GCJ 后再进算路。
+            RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
             Geranium-2.5.3-driftfix1.tipa
             sha256.txt

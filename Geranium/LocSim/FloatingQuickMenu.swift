@@ -9,6 +9,7 @@ import SwiftUI
 
 enum QuickMenuAction: String, CaseIterable {
     case search = "Search"
+    case manualCoord = "Coords"
     case favorites = "Favorites"
     case appProfiles = "Apps"
     case joystick = "Joystick"
@@ -16,10 +17,11 @@ enum QuickMenuAction: String, CaseIterable {
     case altitude = "Altitude"
     case timer = "Timer"
     case stop = "Stop"
-    
+
     var icon: String {
         switch self {
         case .search: return "magnifyingglass"
+        case .manualCoord: return "mappin.and.ellipse"
         case .favorites: return "star.fill"
         case .appProfiles: return "apps.iphone"
         case .joystick: return "gamecontroller.fill"
@@ -29,10 +31,11 @@ enum QuickMenuAction: String, CaseIterable {
         case .stop: return "location.slash.fill"
         }
     }
-    
+
     var color: Color {
         switch self {
         case .search: return .indigo
+        case .manualCoord: return .teal
         case .favorites: return .orange
         case .appProfiles: return .cyan
         case .joystick: return .green
