@@ -1,4 +1,4 @@
-name: "Andromeda DriftFix TIPA v2.5.3"
+name: "Andromeda DriftFix TIPA v2.5.4"
 
 on:
   push:
@@ -45,24 +45,24 @@ jobs:
           cp -R Geranium.app Payload/Geranium.app
           zip -qry Geranium.tipa Payload
           cd ..
-          cp build/Geranium.tipa "Geranium-2.5.3-driftfix1.tipa"
-          shasum -a 256 "Geranium-2.5.3-driftfix1.tipa" | tee sha256.txt
-          ls -la "Geranium-2.5.3-driftfix1.tipa"
+          cp build/Geranium.tipa "Geranium-2.5.4-driftfix2.tipa"
+          shasum -a 256 "Geranium-2.5.4-driftfix2.tipa" | tee sha256.txt
+          ls -la "Geranium-2.5.4-driftfix2.tipa"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Andromeda-DriftFix-TIPA
           path: |
-            Geranium-2.5.3-driftfix1.tipa
+            Geranium-2.5.4-driftfix2.tipa
             sha256.txt
           if-no-files-found: error
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.3-driftfix1
-          name: "Andromeda 2.5.3-driftfix1（单点保活治漂移 + 路线坐标系修正 + 手动坐标）"
+          tag_name: v2.5.4-driftfix2
+          name: "Andromeda 2.5.4-driftfix2（自由路线不吸附 + 任意途径点 + 保活治漂移）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
             1. LocSimManager 单点注入后每 0.75s 保活重注入，压住 locationd 融合定位拉扯（单点漂移根治）；路线终点继续保活。
@@ -72,7 +72,7 @@ jobs:
             5. GPX 导入转 GCJ 后再进算路。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
-            Geranium-2.5.3-driftfix1.tipa
+            Geranium-2.5.4-driftfix2.tipa
             sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
