@@ -274,11 +274,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     enum RouteMode: String, CaseIterable, Identifiable {
         case road = "road"
         case free = "free"
+        case draw = "draw"
         var id: String { rawValue }
         var label: String {
             switch self {
             case .road: return "道路导航"
             case .free: return "自由路线"
+            case .draw: return "手画路线"
             }
         }
     }
@@ -290,13 +292,23 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 终点卡：设最后一个点（保留已有途经点）。
     func setEnd(_ coord: CLLocationCoordinate2D) {
-        if userWaypoints.count < 2 { userWaypoints.append(coord) } else { userWaypoints[userWaypoints.count - 1] = coord }
+        if userWaypoints.count < 2 {
+            userWaypoints.append(coord)
+            waypointModes.append(false)
+        } else {
+            userWaypoints[userWaypoints.count - 1] = coord
+        }
     }
 
     /// 地图选点添加：插入在终点之前（终点保持收尾）。
     func addPickedWaypoint(_ coord: CLLocationCoordinate2D) {
-        if userWaypoints.count < 2 { userWaypoints.append(coord) }
-        else { userWaypoints.insert(coord, at: userWaypoints.count - 1) }
+        if userWaypoints.count < 2 {
+            userWaypoints.append(coord)
+            waypointModes.append(false)
+        } else {
+            userWaypoints.insert(coord, at: userWaypoints.count - 1)
+            waypointModes.insert(false, at: userWaypoints.count - 1)
+        }
     }
 
     func removeWaypoint(at index: Int) {
@@ -358,15 +370,113 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return out
     }
 
-    /// 自由路线：完全不经过导航引擎。用户点列(GCJ)依序直线插值 → routePoints。
-    /// polylineIsWGS=false → updateLocation 逐点 GCJ→WGS 注入（与地图点选单点同一条正确路径）；
-    /// 显示线 = 用户点原样连线（GCJ 画在 GCJ 瓦片上：零偏移、零吸附，内部道路随便走）。
-    func buildFreeRoute(points: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double) {
-        guard points.count >= 2 else { return }
-        let effectiveSpeed = max((minSpeed + maxSpeed) / 2, 0.2)
+    /// DriftFix v2.4 自由路线（智能版）：
+    ///   短段（≤阈值）直线连接（用户点精确）；长段优先步行导航贴合真实街道——
+    ///   但端点容差 150m 内才采用（绝不把用户的点替换成别的点），失败/偏差过大 → 弯曲化兜底；
+    ///   全程平滑 + 变速插值。杜绝直线穿越，也杜绝路网吸附到"别的点"。
+    func buildSmartFreeRoute(points: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double, snapLongSegments: Bool, completion: @escaping (Bool, String?) -> Void) {
+        guard points.count >= 2 else { completion(false, "至少需要两个点"); return }
+        let threshold = 350.0
+        let tolerance = 150.0
+        var pathCoords: [CLLocationCoordinate2D] = [points[0]]
+        let legs = zip(points, points.dropFirst()).map { (from: $0.0, to: $0.1) }
+
+        func appendSegment(_ seg: [CLLocationCoordinate2D]) {
+            if let last = pathCoords.last, let first = seg.first, distanceBetween(last, first) < 1.0 {
+                pathCoords += Array(seg.dropFirst())
+            } else {
+                pathCoords += seg
+            }
+        }
+
+        func finalize() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                var shaped = self.smoothPolyline(pathCoords, passes: 2)
+                shaped[0] = points[0]
+                shaped[shaped.count - 1] = points[points.count - 1]
+                self.polylineIsWGS = false
+                self.routePoints = shaped
+                self.totalPoints = shaped.count
+                self.currentPointIndex = 0
+                self.progress = 0.0
+                self.isSimulating = false
+                self.isPaused = false
+                self.currentPosition = nil
+                self.availableRoutes = []
+                self.allRoutePolylines = []
+                self.routePolyline = MKPolyline(coordinates: shaped, count: shaped.count)
+                var totalMeters: Double = 0
+                for i in 1..<shaped.count {
+                    totalMeters += self.distanceBetween(shaped[i - 1], shaped[i])
+                }
+                let eff = max((minSpeed + maxSpeed) / 2, 0.2)
+                let secs = totalMeters / eff
+                let m = Int(secs) / 60
+                self.estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+                completion(true, nil)
+            }
+        }
+
+        func runLeg(_ idx: Int) {
+            if idx >= legs.count {
+                finalize()
+                return
+            }
+            let leg = legs[idx]
+            let legDistance = distanceBetween(leg.from, leg.to)
+
+            if legDistance <= threshold || !snapLongSegments {
+                let seg = legDistance > threshold
+                    ? self.curvedSegment(from: leg.from, to: leg.to)
+                    : [leg.from, leg.to]
+                appendSegment(seg)
+                runLeg(idx + 1)
+                return
+            }
+
+            // 长段：尝试步行导航贴合真实街道（端点容差内才采用）
+            let request = MKDirections.Request()
+            request.source = MKMapItem(placemark: MKPlacemark(coordinate: leg.from))
+            request.destination = MKMapItem(placemark: MKPlacemark(coordinate: leg.to))
+            request.transportType = .walking
+            MKDirections(request: request).calculate { response, error in
+                DispatchQueue.main.async { [weak self] in
+                    guard self != nil else { return }
+                    var accepted = false
+                    if let routes = response?.routes, let best = routes.first, best.polyline.pointCount >= 2 {
+                        let pc = best.polyline.pointCount
+                        var coords = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: pc)
+                        best.polyline.getCoordinates(&coords, range: NSRange(location: 0, length: pc))
+                        if let f0 = coords.first, let l0 = coords.last {
+                            let df = self!.distanceBetween(f0, leg.from)
+                            let dt = self!.distanceBetween(l0, leg.to)
+                            if df <= tolerance && dt <= tolerance {
+                                let gcj = coords.map { CoordTransform.wgs84ToGcj02($0) }
+                                appendSegment(gcj)
+                                accepted = true
+                            }
+                        }
+                    }
+                    if !accepted {
+                        appendSegment(self!.curvedSegment(from: leg.from, to: leg.to))
+                    }
+                    runLeg(idx + 1)
+                }
+            }
+        }
+        runLeg(0)
+    }
+
+    /// DriftFix v2.4 手画路线：简化（DP 5m）→ 平滑（2 轮）→ 变速插值就绪。
+    func buildFromDrawnPath(points: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double) -> Bool {
+        guard points.count >= 2 else { return false }
+        let simplified = simplifyPolyline(points, epsilon: 5.0)
+        let shaped = smoothPolyline(simplified, passes: 2)
+        guard shaped.count >= 2 else { return false }
         polylineIsWGS = false
-        routePoints = interpolateVariableRoute(coords: points, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
-        totalPoints = routePoints.count
+        routePoints = shaped
+        totalPoints = shaped.count
         currentPointIndex = 0
         progress = 0.0
         isSimulating = false
@@ -374,14 +484,102 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         currentPosition = nil
         availableRoutes = []
         allRoutePolylines = []
-        routePolyline = MKPolyline(coordinates: points, count: points.count)
+        routePolyline = MKPolyline(coordinates: shaped, count: shaped.count)
         var totalMeters: Double = 0
-        for i in 1..<userWaypoints.count {
-            totalMeters += distanceBetween(points[i - 1], points[i])
+        for i in 1..<shaped.count {
+            totalMeters += distanceBetween(shaped[i - 1], shaped[i])
         }
-        let secs = totalMeters / effectiveSpeed
+        let eff = max((minSpeed + maxSpeed) / 2, 0.2)
+        let secs = totalMeters / eff
         let m = Int(secs) / 60
         estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+        return true
+    }
+
+    // MARK: - DriftFix v2.4 几何工具（平滑/简化/弯曲化）
+    private func smoothPolyline(_ input: [CLLocationCoordinate2D], passes: Int) -> [CLLocationCoordinate2D] {
+        var pts = input
+        for _ in 0..<max(passes, 0) {
+            guard pts.count > 2 else { return pts }
+            var out: [CLLocationCoordinate2D] = [pts[0]]
+            for i in 1..<(pts.count - 1) {
+                let a = pts[i - 1], b = pts[i], c = pts[i + 1]
+                out.append(CLLocationCoordinate2D(latitude: (a.latitude + 2 * b.latitude + c.latitude) / 4,
+                                                  longitude: (a.longitude + 2 * b.longitude + c.longitude) / 4))
+            }
+            out.append(pts[pts.count - 1])
+            pts = out
+        }
+        return pts
+    }
+
+    private func simplifyPolyline(_ pts: [CLLocationCoordinate2D], epsilon: Double) -> [CLLocationCoordinate2D] {
+        guard pts.count > 3 else { return pts }
+        var keep = [Bool](repeating: false, count: pts.count)
+        keep[0] = true
+        keep[pts.count - 1] = true
+        var stack: [(Int, Int)] = [(0, pts.count - 1)]
+        while let (s, e) = stack.popLast() {
+            guard e > s + 1 else { continue }
+            var maxD = 0.0
+            var maxI = s
+            for i in (s + 1)..<e {
+                let d = pointToSegmentDistance(pts[i], pts[s], pts[e])
+                if d > maxD { maxD = d; maxI = i }
+            }
+            if maxD > epsilon {
+                keep[maxI] = true
+                stack.append((s, maxI))
+                stack.append((maxI, e))
+            }
+        }
+        var out: [CLLocationCoordinate2D] = []
+        for (i, p) in pts.enumerated() where keep[i] { out.append(p) }
+        return out
+    }
+
+    private func pointToSegmentDistance(_ p: CLLocationCoordinate2D, _ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(a.latitude * Double.pi / 180)
+        let ax = a.longitude * lonScale, ay = a.latitude * latScale
+        let bx = b.longitude * lonScale, by = b.latitude * latScale
+        let px = p.longitude * lonScale, py = p.latitude * latScale
+        let dx = bx - ax, dy = by - ay
+        let len2 = dx * dx + dy * dy
+        guard len2 > 0 else {
+            return CLLocation(latitude: p.latitude, longitude: p.longitude)
+                .distance(from: CLLocation(latitude: a.latitude, longitude: a.longitude))
+        }
+        var t = ((px - ax) * dx + (py - ay) * dy) / len2
+        t = min(max(t, 0), 1)
+        let cx = ax + dx * t, cy = ay + dy * t
+        return ((px - cx) * (px - cx) + (py - cy) * (py - cy)).squareRoot()
+    }
+
+    /// 长段兜底：沿直线走向做正弦绕行（幅度 ≤30m、波长按距离），看起来像自然跑步线路而非直线穿越。
+    private func curvedSegment(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
+        let d = distanceBetween(from, to)
+        guard d > 0 else { return [from, to] }
+        let amp = min(d * 0.06, 30.0)
+        let waves = Double(max(2, min(4, Int(d / 300) + 2)))
+        let steps = max(8, Int(d / 15))
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(from.latitude * Double.pi / 180)
+        let dx = (to.longitude - from.longitude) * lonScale
+        let dy = (to.latitude - from.latitude) * latScale
+        let ux = dx / d, uy = dy / d
+        let px = -uy, py = ux
+        let side = Bool.random() ? 1.0 : -1.0
+        var out: [CLLocationCoordinate2D] = []
+        for s in 0...steps {
+            let t = Double(s) / Double(steps)
+            let perp = side * amp * sin(.pi * waves * t)
+            let x = dx * t + px * perp
+            let y = dy * t + py * perp
+            out.append(CLLocationCoordinate2D(latitude: from.latitude + y / latScale,
+                                              longitude: from.longitude + x / lonScale))
+        }
+        return out
     }
 
     /// 道路导航 + 任意多途径点：MKDirections 不支持多途经点，按 A→B、B→C… 分段链式算路拼接。

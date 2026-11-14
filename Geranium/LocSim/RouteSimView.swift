@@ -32,6 +32,10 @@ struct RouteSimSheet: View {
     @State private var pickerTapped: EquatableCoordinate? = nil
     @State private var pickerPending: EquatableCoordinate? = nil
     @State private var pickerRegion: MKCoordinateRegion? = nil
+    @State private var showDrawOverlay: Bool = false
+    @State private var drawPoints: [CLLocationCoordinate2D] = []
+    @State private var drawMoveToRegion: MKCoordinateRegion? = nil
+    @State private var snapLongOn: Bool = true
     @State private var showGPXPicker: Bool = false
     @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
     @State private var savedRoutes: [RouteSimulator.SavedRouteInfo] = []
@@ -92,17 +96,17 @@ struct RouteSimSheet: View {
                             field: .end
                         )
 
-                        // MARK: - DriftFix v2.1 添加途径点（搜索 / 地图选点，按添加顺序生效）
-                        addWaypointCard
-
-                        // MARK: - DriftFix v2 途经点列表
-                        waypointsSection
-
                         // MARK: - DriftFix v2 线路模式
                         routeModeSection
 
-                        // MARK: - DriftFix v2.3 组合选项（随机顺序/跳过/往返/绕圈）
-                        comboOptionsSection
+                        // MARK: - DriftFix v2.4 模式相关区块
+                        if routeSimulator.routeMode == .draw {
+                            drawHintCard
+                        } else {
+                            addWaypointCard
+                            waypointsSection
+                            comboOptionsSection
+                        }
 
                         // MARK: - Travel Mode
                         VStack(alignment: .leading, spacing: 8) {
@@ -349,17 +353,20 @@ struct RouteSimSheet: View {
         if showMapPicker {
             mapPickerOverlay
         }
+
+        if showDrawOverlay {
+            drawOverlay
+        }
         }
     }
 
-    // MARK: - DriftFix v2 线路模式选择
     // MARK: - DriftFix v2.3 组合选项（随机顺序/跳过/往返/绕圈）
     private var comboOptionsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "wand.and.stars")
                     .foregroundColor(.orange)
-                Text("Combo 组合选项")
+                Text("组合选项")
                     .font(.headline)
                 Spacer()
             }
@@ -389,6 +396,44 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             .onChange(of: loopCount) { _ in routeReady = false }
 
+            Toggle("长段自动贴合道路（自由路线生效）", isOn: $snapLongOn)
+                .font(.subheadline)
+                .padding(.horizontal)
+                .onChange(of: snapLongOn) { _ in routeReady = false }
+
+            Text("途经点行可单独切换 顺序/随机；每次 Calculate 重新随机组合。跳过只作用于「随机」点，固定点保持按序必到。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
+    // MARK: - DriftFix v2.4 手画路线提示卡
+    private var drawHintCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "hand.draw")
+                    .foregroundColor(.accentColor)
+                Text("手画路线")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(.horizontal)
+            Text("点下方「开始手画」→ 在地图上按住拖动画出你的跑步线路（途经内部道路随意画）→ 完成。系统会自动平滑优化成自然步态轨迹，再按速度区间变速播放。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
             Text("途经点行可单独切换 顺序/随机；每次 Calculate 重新随机组合。跳过只作用于「随机」点，固定点保持按序必到。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
@@ -412,7 +457,7 @@ struct RouteSimSheet: View {
                         routeReady = false
                     }) {
                         VStack(spacing: 4) {
-                            Image(systemName: m == .road ? "road.lanes" : "point.topleft.down.to.point.bottomright.curvepath")
+                            Image(systemName: m == .road ? "road.lanes" : (m == .draw ? "hand.draw" : "point.topleft.down.to.point.bottomright.curvepath"))
                             Text(m.label).font(.caption)
                         }
                         .frame(maxWidth: .infinity)
@@ -434,7 +479,9 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             Text(routeSimulator.routeMode == .free
                  ? "自由路线：按你选的点依序直线连接，完全不吸附路网——内部道路/园区/步行道随便走。"
-                 : "道路导航：走真实路网；某段没有导航路线会直接报错，请改用自由路线（不再偷偷吸附替换）。")
+                 : (routeSimulator.routeMode == .draw
+                    ? "手画路线：在地图上按住拖动画出线路，系统自动平滑优化成自然步态轨迹。"
+                    : "道路导航：走真实路网；某段没有导航路线会直接报错，请改用自由路线（不再偷偷吸附替换）。"))
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -495,11 +542,16 @@ struct RouteSimSheet: View {
 
             CustomMapView(
                 tappedCoordinate: $pickerTapped,
-                moveToRegion: $pickerRegion
+                moveToRegion: $pickerRegion,
+                movingPosition: pickerPending?.coordinate
             )
             .frame(maxHeight: .infinity)
             .cornerRadius(12)
             .padding(.horizontal, 12)
+            .onChange(of: pickerTapped) { v in
+                // DriftFix v2.5: 选点地图点击 → 待确认坐标（修复「点击没任何反应」）
+                if let v = v { pickerPending = v }
+            }
 
             HStack(spacing: 6) {
                 if let p = pickerPending {
@@ -528,6 +580,73 @@ struct RouteSimSheet: View {
         showMapPicker = false
         routeReady = false
         AlertKitAPI.present(title: "📍 途径点已添加", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
+    // MARK: - DriftFix v2.4 手画路线弹层（单指绘制，双指缩放）
+    private var drawOverlay: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("取消") {
+                    showDrawOverlay = false
+                    drawPoints = []
+                }
+                .foregroundColor(.red)
+                Button("清除重画") {
+                    drawPoints = []
+                }
+                .foregroundColor(.orange)
+                .padding(.leading, 14)
+                Spacer()
+                Text("按住拖动画出线路")
+                    .font(.headline)
+                Spacer()
+                Button(action: finishDraw) {
+                    Text("完成·优化")
+                        .fontWeight(.semibold)
+                }
+                .disabled(drawPoints.count < 2)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            ZStack {
+                DrawMapView(drawPoints: $drawPoints, moveToRegion: $mapRegion)
+                if drawPoints.isEmpty {
+                    Text("在此区域按住并拖动，画出你的跑步线路\n（途经内部道路随意画，完成后自动平滑优化）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxHeight: .infinity)
+            .cornerRadius(12)
+            .padding(.horizontal, 12)
+
+            HStack(spacing: 6) {
+                Text("已画 \(drawPoints.count) 个轨迹点 · 完成后自动平滑优化")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 10)
+        }
+        .background(Color(UIColor.systemBackground).ignoresSafeArea())
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .zIndex(11)
+    }
+
+    private func finishDraw() {
+        let minMps = speedMinKmh / 3.6
+        let maxMps = speedMaxKmh / 3.6
+        if routeSimulator.buildFromDrawnPath(points: drawPoints, minSpeed: minMps, maxSpeed: maxMps) {
+            showDrawOverlay = false
+            routeReady = true
+            showRouteOnMap()
+            AlertKitAPI.present(title: "手画线路已生成", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        } else {
+            UIApplication.shared.alert(body: "画出的线路太短，请多画一些再点完成。")
+        }
     }
 
     // MARK: - DriftFix v2 途经点列表（起点/途径1..N/终点 全序列，可逐条删）
@@ -953,6 +1072,12 @@ struct RouteSimSheet: View {
     }
     
     private func calculateRoute() {
+        // DriftFix v2.4: 手画模式 → 打开手画地图
+        if routeSimulator.routeMode == .draw {
+            showDrawOverlay = true
+            drawPoints = []
+            return
+        }
         guard routeSimulator.userWaypoints.count >= 2 else { return }
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
@@ -962,11 +1087,16 @@ struct RouteSimSheet: View {
         let pts = seq.map { routeSimulator.userWaypoints[$0] }
 
         if routeSimulator.routeMode == .free {
-            // DriftFix v2: 自由路线——不经过导航引擎，点在哪轨迹在哪（内部道路/园区可用）
+            // DriftFix v2.4: 自由路线智能版——短段直线，长段贴路/弯曲化，杜绝直线穿越与吸附
             routeSimulator.travelMode = selectedMode
-            routeSimulator.buildFreeRoute(points: pts, minSpeed: minMps, maxSpeed: maxMps)
-            routeReady = true
-            showRouteOnMap()
+            routeSimulator.buildSmartFreeRoute(points: pts, minSpeed: minMps, maxSpeed: maxMps, snapLongSegments: snapLongOn) { success, error in
+                if success {
+                    routeReady = true
+                    showRouteOnMap()
+                } else {
+                    UIApplication.shared.alert(body: error ?? "Failed to calculate route")
+                }
+            }
             return
         }
         routeSimulator.calculateFlexibleRoute(points: pts, mode: selectedMode, minSpeed: minMps, maxSpeed: maxMps) { success, error in
@@ -1165,4 +1295,83 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - DriftFix v2.4: 手画地图（单指绘制轨迹，双指缩放；地图自身滚动关闭防冲突）
+struct DrawMapView: UIViewRepresentable {
+    @Binding var drawPoints: [CLLocationCoordinate2D]
+    @Binding var moveToRegion: MKCoordinateRegion?
+
+    func makeUIView(context: Context) -> MKMapView {
+        let mv = MKMapView()
+        mv.delegate = context.coordinator
+        mv.isScrollEnabled = false      // 绘制时地图固定（手指用于画线，否则地图跟手滚动）
+        mv.isPitchEnabled = false
+        mv.isRotateEnabled = false
+        // 双指缩放保留：pan 限单指，两指走地图捏合
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.minimumNumberOfTouches = 1
+        mv.addGestureRecognizer(pan)
+        return mv
+    }
+
+    func updateUIView(_ uiView: MKMapView, context: Context) {
+        if let region = moveToRegion {
+            uiView.setRegion(region, animated: true)
+            DispatchQueue.main.async { self.moveToRegion = nil }
+        }
+        if context.coordinator.lastDrawnCount != drawPoints.count {
+            context.coordinator.lastDrawnCount = drawPoints.count
+            context.coordinator.syncOverlay(uiView, points: drawPoints)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: DrawMapView
+        var lastDrawnCount: Int = 0
+        init(_ parent: DrawMapView) { self.parent = parent }
+
+        @objc func handlePan(_ g: UIPanGestureRecognizer) {
+            guard let mv = g.view as? MKMapView else { return }
+            switch g.state {
+            case .began:
+                parent.drawPoints = []
+            case .changed:
+                let p = g.location(in: mv)
+                let c = mv.convert(p, toCoordinateFrom: mv)
+                if let last = parent.drawPoints.last {
+                    let d = CLLocation(latitude: last.latitude, longitude: last.longitude)
+                        .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude))
+                    if d < 8 { return }   // 8m 采样节流
+                }
+                parent.drawPoints.append(c)
+                parent.lastDrawnCount = parent.drawPoints.count
+                syncOverlay(mv)
+            default:
+                break
+            }
+        }
+
+        func syncOverlay(_ mv: MKMapView, points: [CLLocationCoordinate2D]? = nil) {
+            let pts = points ?? parent.drawPoints
+            for o in mv.overlays where o is MKPolyline { mv.removeOverlay(o) }
+            guard pts.count >= 2 else { return }
+            let poly = MKPolyline(coordinates: pts, count: pts.count)
+            mv.addOverlay(poly, level: .aboveRoads)
+        }
+
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let poly = overlay as? MKPolyline {
+                let r = MKPolylineRenderer(polyline: poly)
+                r.strokeColor = .systemGreen
+                r.lineWidth = 5
+                r.alpha = 0.9
+                return r
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
+    }
 }
