@@ -503,6 +503,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return true
     }
 
+    /// DriftFix v2.4 「AI 优化」：手画原始轨迹 → DP 简化(5m) → 两轮平滑 → 自然步态线路
+    func optimizeDrawnPath(points: [CLLocationCoordinate2D]) -> [CLLocationCoordinate2D] {
+        let simplified = simplifyPolyline(points, epsilon: 5.0)
+        return smoothPolyline(simplified, passes: 2)
+    }
+
     // MARK: - DriftFix v2.4 几何工具（平滑/简化/弯曲化）
     private func smoothPolyline(_ input: [CLLocationCoordinate2D], passes: Int) -> [CLLocationCoordinate2D] {
         var pts = input

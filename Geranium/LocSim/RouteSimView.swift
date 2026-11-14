@@ -33,7 +33,10 @@ struct RouteSimSheet: View {
     @State private var pickerPending: EquatableCoordinate? = nil
     @State private var pickerRegion: MKCoordinateRegion? = nil
     @State private var showDrawOverlay: Bool = false
-    @State private var drawPoints: [CLLocationCoordinate2D] = []
+    @State private var drawStrokes: [[CLLocationCoordinate2D]] = []
+    @State private var optimizedPoints: [CLLocationCoordinate2D]? = nil
+    @State private var drawPreviewOn: Bool = false
+    @State private var drawBrushOn: Bool = false
     @State private var drawMoveToRegion: MKCoordinateRegion? = nil
     @State private var snapLongOn: Bool = true
     @State private var showGPXPicker: Bool = false
@@ -430,7 +433,7 @@ struct RouteSimSheet: View {
                 Spacer()
             }
             .padding(.horizontal)
-            Text("点下方「开始手画」→ 在地图上按住拖动画出你的跑步线路（途经内部道路随意画）→ 完成。系统会自动平滑优化成自然步态轨迹，再按速度区间变速播放。")
+            Text("点「生成路线」进入手画地图：先用「移动地图」定位到区域，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放，撤销/清空随意）。画完点「AI 优化」预览平滑线路，满意点「完成·采用」。")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -590,36 +593,47 @@ struct RouteSimSheet: View {
     }
 
     // MARK: - DriftFix v2.4 手画路线弹层（单指绘制，双指缩放）
+    // MARK: - DriftFix v2.4 手画路线弹层（画笔/移动双模式 + 撤销/清除 + AI 优化预览 + 完成采用）
     private var drawOverlay: some View {
         VStack(spacing: 0) {
             HStack {
-                Button("取消") {
+                Button("关闭") {
+                    // 保留已画笔画，重开可继续画/改
                     showDrawOverlay = false
-                    drawPoints = []
                 }
                 .foregroundColor(.red)
-                Button("清除重画") {
-                    drawPoints = []
-                }
-                .foregroundColor(.orange)
-                .padding(.leading, 14)
                 Spacer()
-                Text("按住拖动画出线路")
+                Text("手画路线")
                     .font(.headline)
                 Spacer()
-                Button(action: finishDraw) {
-                    Text("完成·优化")
-                        .fontWeight(.semibold)
+                Button("清空") {
+                    drawStrokes = []
+                    optimizedPoints = nil
+                    routeReady = false
                 }
-                .disabled(drawPoints.count < 2)
+                .foregroundColor(.orange)
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
 
+            Picker("", selection: $drawBrushOn) {
+                Text("移动地图").tag(false)
+                Text("画笔绘制").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
             ZStack {
-                DrawMapView(drawPoints: $drawPoints, moveToRegion: $mapRegion)
-                if drawPoints.isEmpty {
-                    Text("在此区域按住并拖动，画出你的跑步线路\n（途经内部道路随意画，完成后自动平滑优化）")
+                DrawMapView(
+                    strokes: $drawStrokes,
+                    moveToRegion: $mapRegion,
+                    drawingEnabled: drawBrushOn,
+                    previewPoints: drawPreviewOn ? optimizedPoints : nil
+                )
+                if drawStrokes.isEmpty {
+                    Text(drawBrushOn
+                         ? "在此区域按住并拖动，画出你的跑步线路\n（单指画线、双指缩放；可分多笔画，内部道路随意）"
+                         : "先移动/缩放地图到你要画的区域\n再切到「画笔绘制」开始画")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -631,22 +645,79 @@ struct RouteSimSheet: View {
             .cornerRadius(12)
             .padding(.horizontal, 12)
 
-            HStack(spacing: 6) {
-                Text("已画 \(drawPoints.count) 个轨迹点 · 完成后自动平滑优化")
+            HStack(spacing: 8) {
+                Button(action: undoLastStroke) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.uturn.backward")
+                        Text("撤销一笔")
+                    }
+                    .font(.caption)
+                }
+                .disabled(drawStrokes.isEmpty)
+                Button(action: togglePreview) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "wand.and.stars")
+                        Text(drawPreviewOn ? "看原始" : "AI 优化")
+                    }
+                    .font(.caption)
+                }
+                .disabled(allDrawPoints.count < 3)
+                Spacer()
+                Text("笔画 \(drawStrokes.count) · 点 \(allDrawPoints.count)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            .padding(.vertical, 10)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            Button(action: finishDraw) {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(drawPreviewOn ? "完成·采用优化线路" : "完成·采用手画线路")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(allDrawPoints.count >= 2 ? Color.green : Color.gray)
+                )
+                .foregroundColor(.white)
+                .font(.headline)
+            }
+            .disabled(allDrawPoints.count < 2)
+            .padding(.horizontal)
+            .padding(.bottom, 10)
         }
         .background(Color(UIColor.systemBackground).ignoresSafeArea())
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .zIndex(11)
     }
 
+    private var allDrawPoints: [CLLocationCoordinate2D] {
+        drawStrokes.flatMap { $0 }
+    }
+
+    private func undoLastStroke() {
+        guard !drawStrokes.isEmpty else { return }
+        drawStrokes.removeLast()
+        if drawStrokes.isEmpty { optimizedPoints = nil }
+        routeReady = false
+    }
+
+    private func togglePreview() {
+        if drawPreviewOn {
+            drawPreviewOn = false
+        } else {
+            optimizedPoints = routeSimulator.optimizeDrawnPath(points: allDrawPoints)
+            drawPreviewOn = true
+        }
+    }
+
     private func finishDraw() {
+        let src = (drawPreviewOn && (optimizedPoints?.count ?? 0) >= 2) ? optimizedPoints! : allDrawPoints
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
-        if routeSimulator.buildFromDrawnPath(points: drawPoints, minSpeed: minMps, maxSpeed: maxMps) {
+        if routeSimulator.buildFromDrawnPath(points: src, minSpeed: minMps, maxSpeed: maxMps) {
             showDrawOverlay = false
             routeReady = true
             showRouteOnMap()
@@ -1079,10 +1150,9 @@ struct RouteSimSheet: View {
     }
     
     private func calculateRoute() {
-        // DriftFix v2.4: 手画模式 → 打开手画地图
+        // DriftFix v2.4: 手画模式 → 打开手画地图（保留已有笔画，可继续画/改）
         if routeSimulator.routeMode == .draw {
             showDrawOverlay = true
-            drawPoints = []
             return
         }
         guard routeSimulator.userWaypoints.count >= 2 else { return }
@@ -1304,18 +1374,17 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - DriftFix v2.4: 手画地图（单指绘制轨迹，双指缩放；地图自身滚动关闭防冲突）
+// MARK: - DriftFix v2.4: 手画地图（画笔/移动双模式：单指绘制轨迹，移动时滚动/缩放定位）
 struct DrawMapView: UIViewRepresentable {
-    @Binding var drawPoints: [CLLocationCoordinate2D]
+    @Binding var strokes: [[CLLocationCoordinate2D]]
     @Binding var moveToRegion: MKCoordinateRegion?
+    var drawingEnabled: Bool = true
+    var previewPoints: [CLLocationCoordinate2D]? = nil
 
     func makeUIView(context: Context) -> MKMapView {
         let mv = MKMapView()
         mv.delegate = context.coordinator
-        mv.isScrollEnabled = false      // 绘制时地图固定（手指用于画线，否则地图跟手滚动）
-        mv.isPitchEnabled = false
-        mv.isRotateEnabled = false
-        // 双指缩放保留：pan 限单指，两指走地图捏合
+        // 移动/绘制由 drawingEnabled 动态切换（updateUIView 统一设置）
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         pan.maximumNumberOfTouches = 1
         pan.minimumNumberOfTouches = 1
@@ -1324,13 +1393,17 @@ struct DrawMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
+        uiView.isScrollEnabled = !drawingEnabled   // 画笔=地图固定单指画线；移动=恢复滚动定位
+        uiView.isPitchEnabled = false
+        uiView.isRotateEnabled = false
         if let region = moveToRegion {
             uiView.setRegion(region, animated: true)
             DispatchQueue.main.async { self.moveToRegion = nil }
         }
-        if context.coordinator.lastDrawnCount != drawPoints.count {
-            context.coordinator.lastDrawnCount = drawPoints.count
-            context.coordinator.syncOverlay(uiView, points: drawPoints)
+        let sig = "\(strokes.count)|\(strokes.last?.count ?? -1)|\(previewPoints?.count ?? -1)|\(drawingEnabled)"
+        if context.coordinator.lastSig != sig {
+            context.coordinator.lastSig = sig
+            context.coordinator.syncOverlay(uiView, strokes: strokes, preview: previewPoints)
         }
     }
 
@@ -1338,44 +1411,59 @@ struct DrawMapView: UIViewRepresentable {
 
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: DrawMapView
-        var lastDrawnCount: Int = 0
+        var lastSig: String = "-"
         init(_ parent: DrawMapView) { self.parent = parent }
 
         @objc func handlePan(_ g: UIPanGestureRecognizer) {
             guard let mv = g.view as? MKMapView else { return }
+            if !parent.drawingEnabled { return }   // 移动模式：交给地图自身手势
             switch g.state {
             case .began:
-                parent.drawPoints = []
+                parent.strokes.append([])
             case .changed:
+                guard !(parent.strokes.last?.isEmpty ?? true) || parent.strokes.isEmpty else { break }
                 let p = g.location(in: mv)
                 let c = mv.convert(p, toCoordinateFrom: mv)
-                if let last = parent.drawPoints.last {
-                    let d = CLLocation(latitude: last.latitude, longitude: last.longitude)
+                if parent.strokes.isEmpty { parent.strokes.append([]) }
+                if let last = parent.strokes.last, let lastC = last.last {
+                    let d = CLLocation(latitude: lastC.latitude, longitude: lastC.longitude)
                         .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude))
-                    if d < 8 { return }   // 8m 采样节流
+                    if d < 8 { break }   // 8m 采样节流
                 }
-                parent.drawPoints.append(c)
-                parent.lastDrawnCount = parent.drawPoints.count
-                syncOverlay(mv)
+                parent.strokes[parent.strokes.count - 1].append(c)
+            case .ended:
+                // 单击（未拖动）也记一个点，避免"点了没反应"
+                if parent.strokes.isEmpty || parent.strokes.last?.isEmpty ?? true {
+                    if parent.strokes.isEmpty { parent.strokes.append([]) }
+                    let p = g.location(in: mv)
+                    parent.strokes[parent.strokes.count - 1].append(mv.convert(p, toCoordinateFrom: mv))
+                }
             default:
                 break
             }
         }
 
-        func syncOverlay(_ mv: MKMapView, points: [CLLocationCoordinate2D]? = nil) {
-            let pts = points ?? parent.drawPoints
+        func syncOverlay(_ mv: MKMapView, strokes: [[CLLocationCoordinate2D]], preview: [CLLocationCoordinate2D]?) {
             for o in mv.overlays where o is MKPolyline { mv.removeOverlay(o) }
-            guard pts.count >= 2 else { return }
-            let poly = MKPolyline(coordinates: pts, count: pts.count)
-            mv.addOverlay(poly, level: .aboveRoads)
+            for s in strokes where s.count >= 2 {
+                let poly = MKPolyline(coordinates: s, count: s.count)
+                mv.addOverlay(poly, level: .aboveRoads)
+            }
+            if let pv = preview, pv.count >= 2 {
+                let poly = MKPolyline(coordinates: pv, count: pv.count)
+                mv.addOverlay(poly, level: .aboveRoads)
+            }
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
-                r.strokeColor = .systemGreen
-                r.lineWidth = 5
-                r.alpha = 0.9
+                let isPreview = parent.previewPoints != nil &&
+                    abs(poly.pointCount - (parent.previewPoints?.count ?? 0)) <= 1 &&
+                    mapView.overlays.last === poly
+                r.strokeColor = isPreview ? .systemBlue : .systemGreen
+                r.lineWidth = isPreview ? 4 : 5
+                r.alpha = isPreview ? 0.95 : 0.9
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)
