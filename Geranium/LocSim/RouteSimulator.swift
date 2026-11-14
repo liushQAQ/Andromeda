@@ -97,7 +97,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     //    链式算路拼接，每个用户指定的点都是一段的精确起终点。
     @Published var routeMode: RouteMode = .road
     @Published var userWaypoints: [CLLocationCoordinate2D] = []   // 用户点列(GCJ 显示系)，顺序=起→途经→终
-    
+    @Published var waypointModes: [Bool] = []                     // 与 userWaypoints 对齐：true=随机(每次洗牌)，false=固定顺序
+    @Published var visitSequenceText: String = ""                 // 本次实际访问顺序（起→#3→#1→终）
+
     private var routePoints: [CLLocationCoordinate2D] = []
     private var timer: Timer? = nil
     private var altitude: Double = 0.0
@@ -300,16 +302,62 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     func removeWaypoint(at index: Int) {
         guard userWaypoints.indices.contains(index) else { return }
         userWaypoints.remove(at: index)
+        if waypointModes.indices.contains(index) { waypointModes.remove(at: index) }
+    }
+
+    /// 途经点行：固定顺序 ⇄ 随机 切换
+    func toggleWaypointMode(at index: Int) {
+        guard userWaypoints.indices.contains(index) else { return }
+        while waypointModes.count < userWaypoints.count { waypointModes.append(false) }
+        waypointModes[index].toggle()
+    }
+
+    // MARK: - DriftFix v2.3 访问序列生成（多自由度组合）
+    // ① 每个途经点独立标签：固定顺序（保持相对次序、必到）/ 随机（洗牌+可跳过）
+    // ② 随机点每次 Calculate/每圈重新洗牌，随机插入固定点序列的空隙
+    // ③ 随机跳过概率只作用于随机点（固定点必到）
+    // ④ 起终点随机互换 = 奇数圈反向（往返绕圈）
+    // ⑤ 绕圈次数：整序列重复，每圈重新组合，接缝自动去重
+    func generateVisitSequence(skipProbability: Double, swapEnds: Bool, loops: Int) -> [Int] {
+        let n = userWaypoints.count
+        guard n >= 2 else { return [0] }
+        let middle = Array(1...(n - 2))
+        let skip = min(max(skipProbability, 0), 1)
+        let modeAt: (Int) -> Bool = { $0 < waypointModes.count && waypointModes[$0] }
+
+        var out: [Int] = [0]
+        let loopCount = max(1, loops)
+        for l in 0..<loopCount {
+            var seq = middle.filter { !modeAt($0) }          // 固定点：保持相对顺序
+            var wilds = middle.filter { modeAt($0) }          // 随机点
+            if skip > 0 {
+                wilds = wilds.filter { Double.random(in: 0...1) >= skip }
+            }
+            wilds.shuffle()
+            for w in wilds {
+                seq.insert(w, at: Int.random(in: 0...seq.count))
+            }
+            var leg = [0] + seq + [n - 1]
+            if swapEnds && l % 2 == 1 {
+                leg = [n - 1] + leg.dropFirst().dropLast().reversed() + [0]
+            }
+            for i in leg {
+                if let last = out.last, last == i { continue }  // 圈间接缝去重
+                out.append(i)
+            }
+        }
+        visitSequenceText = out.map { $0 == 0 ? "起" : ($0 == n - 1 ? "终" : "#\($0)") }.joined(separator: " → ")
+        return out
     }
 
     /// 自由路线：完全不经过导航引擎。用户点列(GCJ)依序直线插值 → routePoints。
     /// polylineIsWGS=false → updateLocation 逐点 GCJ→WGS 注入（与地图点选单点同一条正确路径）；
     /// 显示线 = 用户点原样连线（GCJ 画在 GCJ 瓦片上：零偏移、零吸附，内部道路随便走）。
-    func buildFreeRoute(minSpeed: Double, maxSpeed: Double) {
-        guard userWaypoints.count >= 2 else { return }
+    func buildFreeRoute(points: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double) {
+        guard points.count >= 2 else { return }
         let effectiveSpeed = max((minSpeed + maxSpeed) / 2, 0.2)
         polylineIsWGS = false
-        routePoints = interpolateVariableRoute(coords: userWaypoints, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
+        routePoints = interpolateVariableRoute(coords: points, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
         totalPoints = routePoints.count
         currentPointIndex = 0
         progress = 0.0
@@ -318,10 +366,10 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         currentPosition = nil
         availableRoutes = []
         allRoutePolylines = []
-        routePolyline = MKPolyline(coordinates: userWaypoints, count: userWaypoints.count)
+        routePolyline = MKPolyline(coordinates: points, count: points.count)
         var totalMeters: Double = 0
         for i in 1..<userWaypoints.count {
-            totalMeters += distanceBetween(userWaypoints[i - 1], userWaypoints[i])
+            totalMeters += distanceBetween(points[i - 1], points[i])
         }
         let secs = totalMeters / effectiveSpeed
         let m = Int(secs) / 60

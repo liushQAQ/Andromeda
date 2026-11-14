@@ -16,6 +16,9 @@ struct RouteSimSheet: View {
     @State private var selectedMode: TravelMode = .driving
     @State private var speedMinKmh: Double = 30.0
     @State private var speedMaxKmh: Double = 60.0
+    @State private var skipProbPct: Double = 0
+    @State private var swapEndsOn: Bool = false
+    @State private var loopCount: Int = 1
     @State private var isSearchingStart: Bool = false
     @State private var isSearchingEnd: Bool = false
     @State private var startResults: [MKMapItem] = []
@@ -29,7 +32,6 @@ struct RouteSimSheet: View {
     @State private var pickerTapped: EquatableCoordinate? = nil
     @State private var pickerPending: EquatableCoordinate? = nil
     @State private var pickerRegion: MKCoordinateRegion? = nil
-    @State private var speedMultiplier: Double = 1.0
     @State private var showGPXPicker: Bool = false
     @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
     @State private var savedRoutes: [RouteSimulator.SavedRouteInfo] = []
@@ -98,7 +100,10 @@ struct RouteSimSheet: View {
 
                         // MARK: - DriftFix v2 线路模式
                         routeModeSection
-                        
+
+                        // MARK: - DriftFix v2.3 组合选项（随机顺序/跳过/往返/绕圈）
+                        comboOptionsSection
+
                         // MARK: - Travel Mode
                         VStack(alignment: .leading, spacing: 8) {
                             Text("出行方式")
@@ -190,7 +195,7 @@ struct RouteSimSheet: View {
                                         } else {
                                             Image(systemName: "point.topleft.down.to.point.bottomright.curvepath.fill")
                                         }
-                                        Text(routeSimulator.isCalculatingRoute ? "Calculating..." : "Calculate Routes")
+                                        Text(routeSimulator.isCalculatingRoute ? "算路中..." : "生成路线")
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding()
@@ -228,6 +233,13 @@ struct RouteSimSheet: View {
 
                         // MARK: - Start / Save（算路或从存档加载后可用）
                         if routeReady {
+                            // DriftFix v2.3: 本次实际访问顺序（随机组合后的结果）
+                            if !routeSimulator.visitSequenceText.isEmpty {
+                                Text("本次顺序: \(routeSimulator.visitSequenceText)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal)
+                            }
                             // Start button
                             Button(action: startRoute) {
                                 HStack {
@@ -341,6 +353,53 @@ struct RouteSimSheet: View {
     }
 
     // MARK: - DriftFix v2 线路模式选择
+    // MARK: - DriftFix v2.3 组合选项（随机顺序/跳过/往返/绕圈）
+    private var comboOptionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "wand.and.stars")
+                    .foregroundColor(.orange)
+                Text("Combo 组合选项")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(.horizontal)
+
+            HStack {
+                Text("随机跳过")
+                    .font(.caption)
+                    .frame(width: 74)
+                Slider(value: $skipProbPct, in: 0...100, step: 5)
+                    .onChange(of: skipProbPct) { _ in routeReady = false }
+                Text("\(Int(skipProbPct))%")
+                    .font(.caption)
+                    .frame(width: 36)
+            }
+            .padding(.horizontal)
+
+            Toggle("起终点随机互换（往返）", isOn: $swapEndsOn)
+                .font(.subheadline)
+                .padding(.horizontal)
+                .onChange(of: swapEndsOn) { _ in routeReady = false }
+
+            Stepper(value: $loopCount, in: 1...20) {
+                Text("绕圈次数 ×\(loopCount)")
+                    .font(.subheadline)
+            }
+            .padding(.horizontal)
+            .onChange(of: loopCount) { _ in routeReady = false }
+
+            Text("途经点行可单独切换 顺序/随机；每次 Calculate 重新随机组合。跳过只作用于「随机」点，固定点保持按序必到。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
     private var routeModeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("线路模式")
@@ -496,12 +555,26 @@ struct RouteSimSheet: View {
                 ForEach(routeSimulator.userWaypoints.indices, id: \.self) { idx in
                     let isStart = idx == 0
                     let isEnd = idx == last
+                    let isWild = idx > 0 && idx < last
+                        && idx < routeSimulator.waypointModes.count
+                        && routeSimulator.waypointModes[idx]
                     HStack(spacing: 8) {
                         Image(systemName: isStart ? "play.fill" : (isEnd ? "flag.checkered.fill" : "mappin"))
                             .font(.caption)
                             .foregroundColor(isStart ? .green : (isEnd ? .red : .blue))
                         Text(isStart ? "起点" : (isEnd ? "终点" : "途经点 \(idx)"))
                             .font(.subheadline)
+                        if !isStart && !isEnd {
+                            Button(action: { routeSimulator.toggleWaypointMode(at: idx) }) {
+                                HStack(spacing: 2) {
+                                    Image(systemName: isWild ? "shuffle" : "lock.fill")
+                                    Text(isWild ? "随机" : "顺序")
+                                }
+                                .font(.caption2)
+                                .foregroundColor(isWild ? .orange : .secondary)
+                            }
+                            .padding(.horizontal, 2)
+                        }
                         Spacer()
                         Text(String(format: "%.4f, %.4f",
                                     routeSimulator.userWaypoints[idx].latitude,
@@ -883,16 +956,20 @@ struct RouteSimSheet: View {
         guard routeSimulator.userWaypoints.count >= 2 else { return }
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
+        // DriftFix v2.3: 多自由度组合——每点 顺序/随机 + 跳过 + 往返 + 绕圈，每次重新生成
+        let seq = routeSimulator.generateVisitSequence(skipProbability: skipProbPct / 100, swapEnds: swapEndsOn, loops: loopCount)
+        guard seq.count >= 2 else { return }
+        let pts = seq.map { routeSimulator.userWaypoints[$0] }
 
         if routeSimulator.routeMode == .free {
             // DriftFix v2: 自由路线——不经过导航引擎，点在哪轨迹在哪（内部道路/园区可用）
             routeSimulator.travelMode = selectedMode
-            routeSimulator.buildFreeRoute(minSpeed: minMps, maxSpeed: maxMps)
+            routeSimulator.buildFreeRoute(points: pts, minSpeed: minMps, maxSpeed: maxMps)
             routeReady = true
             showRouteOnMap()
             return
         }
-        routeSimulator.calculateFlexibleRoute(points: routeSimulator.userWaypoints, mode: selectedMode, minSpeed: minMps, maxSpeed: maxMps) { success, error in
+        routeSimulator.calculateFlexibleRoute(points: pts, mode: selectedMode, minSpeed: minMps, maxSpeed: maxMps) { success, error in
             if success {
                 routeReady = true
                 showRouteOnMap()
