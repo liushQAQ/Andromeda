@@ -108,14 +108,16 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/Geranium/GeraniumRootHelper",
+				"$(SRCROOT)/Geranium/Injector",
 			);
 			name = "Copy RootHelper";
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/GeraniumRootHelper",
+				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/InjectorBin/ldid",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "cp \"${SRCROOT}/Geranium/GeraniumRootHelper\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\nchmod +x \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\n";
+			shellScript = "cp \"${SRCROOT}/Geranium/GeraniumRootHelper\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\nchmod +x \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\nrm -rf \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/InjectorBin\"\ncp -R \"${SRCROOT}/Geranium/Injector\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/InjectorBin\"\nchmod +x \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/InjectorBin/\"*\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -876,7 +878,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Geranium/Geranium.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_ASSET_PATHS = "\"Geranium/Preview Content\"";
 				DEVELOPMENT_TEAM = 7G89J82G2A;
 				ENABLE_PREVIEWS = YES;
@@ -897,7 +899,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.5.11-freetrack;
+				MARKETING_VERSION = 2.6.0-freetrack;
 				PRODUCT_BUNDLE_IDENTIFIER = com.son3ra1n.andromeda;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -915,7 +917,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Geranium/Geranium.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_ASSET_PATHS = "\"Geranium/Preview Content\"";
 				DEVELOPMENT_TEAM = 7G89J82G2A;
 				ENABLE_PREVIEWS = YES;
@@ -936,7 +938,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.5.11-freetrack;
+				MARKETING_VERSION = 2.6.0-freetrack;
 				PRODUCT_BUNDLE_IDENTIFIER = com.son3ra1n.andromeda;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

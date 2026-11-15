@@ -101,6 +101,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var visitSequenceText: String = ""                 // 本次实际访问顺序（起→#3→#1→终）
     @Published var estimatedMeters: Double = 0                    // DriftFix v2.6: 预估总里程（米）
     @Published var estimatedSteps: Int = 0                        // DriftFix v2.6: 预估步数 = 里程 ÷ 步幅
+    // DriftFix v2.9: 手画笔画常驻（存在这里而不是 View 的 @State，关掉面板/退出 App 都不丢）
+    @Published var drawnStrokes: [[CLLocationCoordinate2D]] = []
 
     private var routePoints: [CLLocationCoordinate2D] = []
     private var timer: Timer? = nil
@@ -321,6 +323,21 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// 地图连续选点：一次把按下的 1/2/3… 顺序插到终点之前（不被打乱）
+    func addPickedWaypoints(_ coords: [CLLocationCoordinate2D]) {
+        guard !coords.isEmpty else { return }
+        normalizeModes()
+        if userWaypoints.count < 2 {
+            userWaypoints.append(contentsOf: coords)
+            waypointModes.append(contentsOf: [Bool](repeating: false, count: coords.count))
+        } else {
+            let at = userWaypoints.count - 1
+            userWaypoints.insert(contentsOf: coords, at: at)
+            waypointModes.insert(contentsOf: [Bool](repeating: false, count: coords.count), at: at)
+        }
+        normalizeModes()
+    }
+
     func removeWaypoint(at index: Int) {
         normalizeModes()
         guard userWaypoints.indices.contains(index) else { return }
@@ -350,17 +367,19 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // ② 随机点先按几何位置归到「相邻锚点之间的空档」，再沿空档做就近串联，
     //    只保留「前两个最近里随机取一个」的轻微随机（有变化但不打结）；
     // ③ 多生成几组候选，取「线段交叉最少 → 总里程最短」的一组；
-    // ④ 随机跳过只作用于随机点；起终点互换 = 奇数圈反向（往返）；绕圈次数 = 整序列重复。
-    func generateVisitSequence(skipProbability: Double, swapEnds: Bool, loops: Int) -> [Int] {
+    // ④ 随机跳过只作用于随机点；往返 = 偶数圈反向（去一回一）；
+    //    起终点随机互换 = 每次生成随机决定整条线路从哪一头起跑（和"往返"不是一回事）。
+    func generateVisitSequence(skipProbability: Double, swapEnds: Bool, randomFlip: Bool = false, loops: Int) -> [Int] {
         normalizeModes()
         let n = userWaypoints.count
         guard n >= 2 else { return [0] }
         let skip = min(max(skipProbability, 0), 1)
         let modes = waypointModes
+        let flipAll = randomFlip && Bool.random()
 
-        var out: [Int] = [0]
+        var out: [Int] = []
         let loopCount = max(1, loops)
-        for l in 0..<loopCount {
+        for _ in 0..<loopCount {
             var fixed: [Int] = []
             var wilds: [Int] = []
             if n > 2 {
@@ -375,21 +394,27 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                 }
             }
             var leg = smoothOrder(fixed: fixed, wilds: wilds, n: n)
-            if swapEnds && l % 2 == 1 {
-                var rev: [Int] = [n - 1]
-                var i = leg.count - 2
-                while i >= 1 {
-                    rev.append(leg[i])
-                    i -= 1
-                }
-                rev.append(0)
-                leg = rev
-            }
+            if flipAll { leg.reverse() }
             for i in leg {
                 if let last = out.last, last == i { continue }  // 圈间接缝去重
                 out.append(i)
             }
+            // 往返：每圈原路再跑回来（去一回一）；绕圈 N 次 = N 个来回
+            if swapEnds {
+                var back: [Int] = []
+                var k = leg.count - 2
+                while k >= 1 {
+                    back.append(leg[k])
+                    k -= 1
+                }
+                if let firstIdx = leg.first { back.append(firstIdx) }
+                for i in back {
+                    if let last = out.last, last == i { continue }
+                    out.append(i)
+                }
+            }
         }
+        if out.isEmpty { out = [0, n - 1] }
         visitSequenceText = out.map { $0 == 0 ? "起" : ($0 == n - 1 ? "终" : "#\($0)") }.joined(separator: " → ")
         return out
     }
@@ -761,6 +786,57 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             out.append(to)
         }
         return out
+    }
+
+    // MARK: - DriftFix v2.9 手画笔画持久化（关面板/退出 App 都不丢，回来接着改）
+    static func drawnStrokesURL() -> URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return dir.appendingPathComponent("andromeda_drawn_strokes.json")
+    }
+
+    func persistDrawnStrokes() {
+        let raw: [[[Double]]] = drawnStrokes.map { $0.map { [$0.latitude, $0.longitude] } }
+        guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
+        try? data.write(to: Self.drawnStrokesURL(), options: .atomic)
+    }
+
+    func restoreDrawnStrokes() {
+        guard let data = try? Data(contentsOf: Self.drawnStrokesURL()),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let raw = obj as? [[[Double]]] else { return }
+        let strokes: [[CLLocationCoordinate2D]] = raw.map { stroke in
+            stroke.compactMap { pair in
+                guard pair.count >= 2 else { return nil }
+                return CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
+            }
+        }
+        if !strokes.isEmpty { drawnStrokes = strokes }
+    }
+
+    func clearDrawnStrokes() {
+        drawnStrokes = []
+        try? FileManager.default.removeItem(at: Self.drawnStrokesURL())
+    }
+
+    /// 手画线路 → 点序列：把简化后的关键节点写入 userWaypoints，
+    /// 这样画完还能在「点序列」里逐点删除/改顺序/中间补点，不用整条重画。
+    @discardableResult
+    func adoptDrawnAsWaypoints(points: [CLLocationCoordinate2D], maxPoints: Int = 40) -> Int {
+        guard points.count >= 2 else { return 0 }
+        var picked = simplifyPolyline(points, epsilon: 8.0)
+        if picked.count > maxPoints {
+            let step = Double(picked.count - 1) / Double(maxPoints - 1)
+            var thinned: [CLLocationCoordinate2D] = []
+            for i in 0..<maxPoints {
+                let idx = min(picked.count - 1, Int((Double(i) * step).rounded()))
+                thinned.append(picked[idx])
+            }
+            picked = thinned
+        }
+        userWaypoints = picked
+        waypointModes = [Bool](repeating: false, count: picked.count)
+        normalizeModes()
+        return picked.count
     }
 
     /// 道路导航 + 任意多途径点：MKDirections 不支持多途经点，按 A→B、B→C… 分段链式算路拼接。

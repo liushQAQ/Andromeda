@@ -19,6 +19,7 @@ struct RouteSimSheet: View {
     @AppStorage("andromedaSpeedMax") private var speedMaxKmh: Double = 10.0
     @AppStorage("andromedaSkipPct") private var skipProbPct: Double = 0
     @AppStorage("andromedaSwapEnds") private var swapEndsOn: Bool = false
+    @AppStorage("andromedaRandomFlip") private var randomFlipOn: Bool = false
     @AppStorage("andromedaLoops") private var loopCount: Int = 1
     @AppStorage("andromedaSnapLong") private var snapLongOn: Bool = true
     @AppStorage("andromedaFillSpacing") private var fillSpacing: Double = 200
@@ -32,15 +33,13 @@ struct RouteSimSheet: View {
     @State private var isSearchingWpt: Bool = false
     @State private var wptResults: [MKMapItem] = []
     @State private var showMapPicker: Bool = false
-    @State private var pickerTapped: EquatableCoordinate? = nil
-    @State private var pickerPending: EquatableCoordinate? = nil
     @State private var pickerRegion: MKCoordinateRegion? = nil
+    @State private var pickerPoints: [CLLocationCoordinate2D] = []
     @State private var showDrawOverlay: Bool = false
-    @State private var drawStrokes: [[CLLocationCoordinate2D]] = []
     @State private var optimizedPoints: [CLLocationCoordinate2D]? = nil
     @State private var drawPreviewOn: Bool = false
-    @State private var drawBrushOn: Bool = false
-    @State private var drawMoveToRegion: MKCoordinateRegion? = nil
+    @State private var drawMode: Int = 1          // 0=移动地图 1=画笔绘制 2=修改线路
+    @State private var drawStrokes: [[CLLocationCoordinate2D]] = []
     @State private var showGPXPicker: Bool = false
     @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
     @State private var savedRoutes: [RouteSimulator.SavedRouteInfo] = []
@@ -287,6 +286,8 @@ struct RouteSimSheet: View {
             }
             .onAppear {
                 refreshSavedRoutes()
+                routeSimulator.restoreDrawnStrokes()
+                if drawStrokes.isEmpty { drawStrokes = routeSimulator.drawnStrokes }
             }
             .sheet(item: $shareItem) { item in
                 ActivityShareSheet(items: [item.url])
@@ -410,22 +411,9 @@ struct RouteSimSheet: View {
             }
             .padding(.horizontal)
 
-            HStack {
-                Text("随机跳过")
-                    .font(.caption)
-                    .frame(width: 74)
-                Slider(value: $skipProbPct, in: 0...100, step: 5)
-                    .onChange(of: skipProbPct) { _ in routeReady = false }
-                Text("\(Int(skipProbPct))%")
-                    .font(.caption)
-                    .frame(width: 36)
-            }
-            .padding(.horizontal)
+            skipOptionGroup
 
-            Toggle("起终点随机互换（往返）", isOn: $swapEndsOn)
-                .font(.subheadline)
-                .padding(.horizontal)
-                .onChange(of: swapEndsOn) { _ in routeReady = false }
+            directionOptionGroup
 
             Stepper(value: $loopCount, in: 1...20) {
                 Text("绕圈次数 ×\(loopCount)")
@@ -439,7 +427,7 @@ struct RouteSimSheet: View {
                 .padding(.horizontal)
                 .onChange(of: snapLongOn) { _ in routeReady = false }
 
-            Text("途经点行可单独切换 顺序/随机；每次 Calculate 重新随机组合。跳过只作用于「随机」点，固定点保持按序必到。")
+            Text("途经点行可单独切换 顺序/随机；每次生成重新组合。跳过只作用于「随机」点，固定点按序必到。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -447,6 +435,44 @@ struct RouteSimSheet: View {
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
+    private var skipOptionGroup: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("随机点跳过")
+                    .font(.caption)
+                    .frame(width: 74)
+                Slider(value: $skipProbPct, in: 0...100, step: 5)
+                    .onChange(of: skipProbPct) { _ in routeReady = false }
+                Text("\(Int(skipProbPct))%")
+                    .font(.caption)
+                    .frame(width: 36)
+            }
+            Text("每次生成线路时，被标成「随机」的途经点各有这个概率被跳过；标成「顺序」的点一定到。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal)
+    }
+
+    private var directionOptionGroup: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("往返（去程 + 原路回程）", isOn: $swapEndsOn)
+                .font(.subheadline)
+                .onChange(of: swapEndsOn) { _ in routeReady = false }
+            Text("按上面这条线路跑到头，再原路跑回来；绕圈 3 次就是 3 个来回。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            Toggle("起点终点随机互换（每次随机决定从哪头起跑）", isOn: $randomFlipOn)
+                .font(.subheadline)
+                .onChange(of: randomFlipOn) { _ in routeReady = false }
+            Text("每次生成时随机决定整条线路从起点跑还是从终点跑（不是来回跑，只换方向）。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
         .padding(.horizontal)
     }
 
@@ -461,7 +487,7 @@ struct RouteSimSheet: View {
                 Spacer()
             }
             .padding(.horizontal)
-            Text("点「生成路线」进入手画地图：先用「移动地图」定位到区域，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放，撤销/清空随意）。画完点「AI 优化」预览平滑线路，满意点「完成·采用」。")
+            Text("点「生成路线」进入手画地图：先用「移动地图」定位，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放）。画完可切「修改线路」长按拖动改点、轻点删点，不用整条重画。笔画会自动保存，关掉再进来能接着改。")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -529,10 +555,21 @@ struct RouteSimSheet: View {
                 selectedCoord: nil,
                 field: .waypoint
             )
-            Button(action: { showMapPicker = true }) {
+            Button(action: {
+                pickerPoints = []
+                // 打开就落在当前线路区域（没有就落在起点附近），不用先自己找位置
+                if let r = mapRegion {
+                    pickerRegion = r
+                } else if let first = routeSimulator.userWaypoints.first {
+                    pickerRegion = MKCoordinateRegion(center: first,
+                                                      latitudinalMeters: 3000,
+                                                      longitudinalMeters: 3000)
+                }
+                showMapPicker = true
+            }) {
                 HStack {
                     Image(systemName: "map.fill")
-                    Text("在地图上选点添加")
+                    Text("在地图上连续选点添加")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
@@ -546,77 +583,122 @@ struct RouteSimSheet: View {
         }
     }
 
-    // MARK: - DriftFix v2.1 地图选点弹层（在路线页内完成，不切出去）
+    // MARK: - DriftFix v2.9 地图连续选点（一次打开，长按加 1/2/3…，右上角一次保存）
     private var mapPickerOverlay: some View {
         VStack(spacing: 0) {
             HStack {
                 Button("取消") {
                     showMapPicker = false
-                    pickerPending = nil
+                    pickerPoints = []
                 }
                 .foregroundColor(.red)
                 Spacer()
-                Text("点地图选途径点")
+                Text("长按地图连续加点")
                     .font(.headline)
                 Spacer()
-                Button(action: confirmPick) {
-                    Text("确认添加")
+                Button(action: commitPickedPoints) {
+                    Text(pickerPoints.isEmpty ? "保存" : "保存 \(pickerPoints.count) 个")
                         .fontWeight(.semibold)
                 }
-                .disabled(pickerPending == nil)
+                .disabled(pickerPoints.isEmpty)
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
 
-            CustomMapView(
-                tappedCoordinate: $pickerTapped,
-                moveToRegion: $pickerRegion,
-                movingPosition: pickerPending?.coordinate
-            )
-            .frame(maxHeight: .infinity)
-            .cornerRadius(12)
-            .padding(.horizontal, 12)
-            .onChange(of: pickerTapped) { v in
-                // DriftFix v2.5: 选点地图点击 → 待确认坐标（修复「点击没任何反应」）
-                if let v = v { pickerPending = v }
-            }
-
-            HStack(spacing: 6) {
-                if let p = pickerPending {
-                    Image(systemName: "mappin.circle.fill")
-                        .foregroundColor(.green)
-                    Text(String(format: "%.5f, %.5f", p.coordinate.latitude, p.coordinate.longitude))
-                        .font(.caption)
-                        .foregroundColor(.primary)
-                } else {
-                    Text("在上方地图任意位置点一下")
-                        .font(.caption)
+            MultiPickMapView(points: $pickerPoints, moveToRegion: $pickerRegion)
+                .frame(maxHeight: .infinity)
+                .cornerRadius(12)
+                .padding(.horizontal, 12)
+                .overlay(alignment: .top) {
+                    Text("长按地图任意位置放一个点，可以连放很多个；点下面的数字标签可删除")
+                        .font(.caption2)
                         .foregroundColor(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                        .padding(.top, 8)
+                        .allowsHitTesting(false)
                 }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if pickerPoints.isEmpty {
+                        Text("还没有点：长按地图放点")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 12)
+                    } else {
+                        ForEach(Array(pickerPoints.enumerated()), id: \.offset) { idx, p in
+                            HStack(spacing: 4) {
+                                Text("\(idx + 1)")
+                                    .font(.caption2.bold())
+                                    .foregroundColor(.white)
+                                    .frame(width: 18, height: 18)
+                                    .background(Circle().fill(Color.blue))
+                                Text(String(format: "%.4f,%.4f", p.latitude, p.longitude))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Button(action: {
+                                    if pickerPoints.indices.contains(idx) {
+                                        pickerPoints.remove(at: idx)
+                                    }
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.secondarySystemBackground)))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
             }
-            .padding(.vertical, 10)
+            .frame(height: 56)
+
+            if !pickerPoints.isEmpty {
+                Button(action: { pickerPoints = [] }) {
+                    Text("全部清空")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                .padding(.bottom, 10)
+            }
         }
         .background(Color(UIColor.systemBackground).ignoresSafeArea())
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .zIndex(10)
     }
 
-    private func confirmPick() {
-        guard let picked = pickerPending else { return }
-        routeSimulator.addPickedWaypoint(picked.coordinate)
-        pickerPending = nil
+    private func commitPickedPoints() {
+        guard !pickerPoints.isEmpty else { return }
+        let pts = pickerPoints
+        pickerPoints = []
         showMapPicker = false
+        routeSimulator.addPickedWaypoints(pts)
         routeReady = false
-        AlertKitAPI.present(title: "📍 途径点已添加", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "📍 已添加 \(pts.count) 个途经点", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
-    // MARK: - DriftFix v2.4 手画路线弹层（单指绘制，双指缩放）
-    // MARK: - DriftFix v2.4 手画路线弹层（画笔/移动双模式 + 撤销/清除 + AI 优化预览 + 完成采用）
+    // MARK: - DriftFix v2.9 手画路线弹层（画笔 / 移动 / 修改 三模式，笔画常驻可反复改）
+    private var drawStrokesBinding: Binding<[[CLLocationCoordinate2D]]> {
+        $drawStrokes
+    }
+
+    /// 画笔改动落到 RouteSimulator 并存盘（关面板/退出 App 都不丢）
+    private func syncDrawStrokes() {
+        routeSimulator.drawnStrokes = drawStrokes
+        routeSimulator.persistDrawnStrokes()
+    }
+
     private var drawOverlay: some View {
         VStack(spacing: 0) {
             HStack {
                 Button("关闭") {
-                    // 保留已画笔画，重开可继续画/改
+                    // 笔画常驻（存盘），下次进来接着改，不用重画
+                    syncDrawStrokes()
                     showDrawOverlay = false
                 }
                 .foregroundColor(.red)
@@ -626,6 +708,7 @@ struct RouteSimSheet: View {
                 Spacer()
                 Button("清空") {
                     drawStrokes = []
+                    routeSimulator.clearDrawnStrokes()
                     optimizedPoints = nil
                     routeReady = false
                 }
@@ -634,24 +717,28 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             .padding(.vertical, 10)
 
-            Picker("", selection: $drawBrushOn) {
-                Text("移动地图").tag(false)
-                Text("画笔绘制").tag(true)
+            Picker("", selection: $drawMode) {
+                Text("移动地图").tag(0)
+                Text("画笔绘制").tag(1)
+                Text("修改线路").tag(2)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
 
             ZStack {
                 DrawMapView(
-                    strokes: $drawStrokes,
+                    strokes: drawStrokesBinding,
                     moveToRegion: $mapRegion,
-                    drawingEnabled: drawBrushOn,
+                    drawingEnabled: drawMode == 1,
+                    editingEnabled: drawMode == 2,
                     previewPoints: drawPreviewOn ? optimizedPoints : nil
                 )
-                if drawStrokes.isEmpty {
-                    Text(drawBrushOn
+                if allDrawPoints.isEmpty {
+                    Text(drawMode == 1
                          ? "在此区域按住并拖动，画出你的跑步线路\n（单指画线、双指缩放；可分多笔画，内部道路随意）"
-                         : "先移动/缩放地图到你要画的区域\n再切到「画笔绘制」开始画")
+                         : (drawMode == 2
+                            ? "长按线路上的点拖动可以改形\n轻点线路上的点可以删掉它"
+                            : "先移动/缩放地图到你要画的区域\n再切到「画笔绘制」开始画"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -662,6 +749,14 @@ struct RouteSimSheet: View {
             .frame(maxHeight: .infinity)
             .cornerRadius(12)
             .padding(.horizontal, 12)
+
+            if drawMode == 2 {
+                Text("修改模式：长按线路上的点拖动改形，轻点点删掉；改完点下面「完成·采用」。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+            }
 
             HStack(spacing: 8) {
                 Button(action: undoLastStroke) {
@@ -687,6 +782,20 @@ struct RouteSimSheet: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
+
+            HStack(spacing: 8) {
+                Button(action: adoptDrawAsWaypoints) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "list.number")
+                        Text("转成可编辑点")
+                    }
+                    .font(.caption)
+                }
+                .disabled(allDrawPoints.count < 2)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 6)
 
             Button(action: finishDraw) {
                 HStack {
@@ -719,7 +828,27 @@ struct RouteSimSheet: View {
         guard !drawStrokes.isEmpty else { return }
         drawStrokes.removeLast()
         if drawStrokes.isEmpty { optimizedPoints = nil }
+        syncDrawStrokes()
         routeReady = false
+    }
+
+    private func adoptDrawAsWaypoints() {
+        let src = (drawPreviewOn && (optimizedPoints?.count ?? 0) >= 2) ? optimizedPoints! : allDrawPoints
+        let n = routeSimulator.adoptDrawnAsWaypoints(points: src)
+        guard n >= 2 else {
+            UIApplication.shared.alert(body: "线路太短，多画一点再转。")
+            return
+        }
+        if let first = routeSimulator.userWaypoints.first {
+            startText = String(format: "%.5f, %.5f", first.latitude, first.longitude)
+        }
+        if let last = routeSimulator.userWaypoints.last {
+            endText = String(format: "%.5f, %.5f", last.latitude, last.longitude)
+        }
+        routeReady = false
+        showDrawOverlay = false
+        syncDrawStrokes()
+        AlertKitAPI.present(title: "已转成 \(n) 个可编辑点", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     private func togglePreview() {
@@ -736,6 +865,7 @@ struct RouteSimSheet: View {
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
         if routeSimulator.buildFromDrawnPath(points: src, minSpeed: minMps, maxSpeed: maxMps) {
+            syncDrawStrokes()
             showDrawOverlay = false
             routeReady = true
             showRouteOnMap()
@@ -1233,17 +1363,20 @@ struct RouteSimSheet: View {
     }
     
     private func calculateRoute() {
-        // DriftFix v2.4: 手画模式 → 打开手画地图（保留已有笔画，可继续画/改；默认直接进画笔模式）
+        // DriftFix v2.9: 手画模式 → 打开手画地图（笔画常驻，可接着改；默认直接进画笔模式）
         if routeSimulator.routeMode == .draw {
-            drawBrushOn = true
+            drawMode = 1
             showDrawOverlay = true
             return
         }
         guard routeSimulator.userWaypoints.count >= 2 else { return }
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
-        // DriftFix v2.3: 多自由度组合——每点 顺序/随机 + 跳过 + 往返 + 绕圈，每次重新生成
-        let seq = routeSimulator.generateVisitSequence(skipProbability: skipProbPct / 100, swapEnds: swapEndsOn, loops: loopCount)
+        // DriftFix v2.3: 多自由度组合——每点 顺序/随机 + 跳过 + 往返 + 随机互换 + 绕圈
+        let seq = routeSimulator.generateVisitSequence(skipProbability: skipProbPct / 100,
+                                                       swapEnds: swapEndsOn,
+                                                       randomFlip: randomFlipOn,
+                                                       loops: loopCount)
         guard seq.count >= 2 else { return }
         let pts = seq.map { routeSimulator.userWaypoints[$0] }
 
@@ -1488,11 +1621,12 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - DriftFix v2.4: 手画地图（画笔/移动双模式：单指绘制轨迹，移动时滚动/缩放定位）
+// MARK: - DriftFix v2.4: 手画地图（画笔/移动/修改三模式：单指绘制轨迹，移动时滚动/缩放定位）
 struct DrawMapView: UIViewRepresentable {
     @Binding var strokes: [[CLLocationCoordinate2D]]
     @Binding var moveToRegion: MKCoordinateRegion?
     var drawingEnabled: Bool = true
+    var editingEnabled: Bool = false
     var previewPoints: [CLLocationCoordinate2D]? = nil
 
     func makeUIView(context: Context) -> MKMapView {
@@ -1503,6 +1637,20 @@ struct DrawMapView: UIViewRepresentable {
         pan.maximumNumberOfTouches = 1
         pan.minimumNumberOfTouches = 1
         mv.addGestureRecognizer(pan)
+
+        // 修改模式：长按拖动改点 / 轻点点删点
+        let editPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleEditDrag(_:)))
+        editPress.minimumPressDuration = 0.35
+        editPress.numberOfTouchesRequired = 1
+        editPress.isEnabled = false
+        mv.addGestureRecognizer(editPress)
+        context.coordinator.editPress = editPress
+
+        let editTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleEditTap(_:)))
+        editTap.numberOfTouchesRequired = 1
+        editTap.isEnabled = false
+        mv.addGestureRecognizer(editTap)
+        context.coordinator.editTap = editTap
         return mv
     }
 
@@ -1511,11 +1659,13 @@ struct DrawMapView: UIViewRepresentable {
         uiView.isZoomEnabled = !drawingEnabled     // 画笔模式禁双击/捏合缩放（防误触变成缩放地图）
         uiView.isPitchEnabled = false
         uiView.isRotateEnabled = false
+        context.coordinator.editPress?.isEnabled = editingEnabled
+        context.coordinator.editTap?.isEnabled = editingEnabled
         if let region = moveToRegion {
             uiView.setRegion(region, animated: true)
             DispatchQueue.main.async { self.moveToRegion = nil }
         }
-        let sig = "\(strokes.count)|\(strokes.last?.count ?? -1)|\(previewPoints?.count ?? -1)|\(drawingEnabled)"
+        let sig = "\(strokes.count)|\(strokes.last?.count ?? -1)|\(previewPoints?.count ?? -1)|\(drawingEnabled)|\(editingEnabled)"
         if context.coordinator.lastSig != sig {
             context.coordinator.lastSig = sig
             context.coordinator.syncOverlay(uiView, strokes: strokes, preview: previewPoints)
@@ -1525,8 +1675,17 @@ struct DrawMapView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     class Coordinator: NSObject, MKMapViewDelegate {
+        struct EditDrag {
+            let stroke: Int
+            let anchor: CLLocationCoordinate2D
+            let members: [(idx: Int, origin: CLLocationCoordinate2D, weight: Double)]
+        }
+
         var parent: DrawMapView
         var lastSig: String = "-"
+        var editPress: UILongPressGestureRecognizer?
+        var editTap: UITapGestureRecognizer?
+        private var editDrag: EditDrag? = nil
         init(_ parent: DrawMapView) { self.parent = parent }
 
         @objc func handlePan(_ g: UIPanGestureRecognizer) {
@@ -1558,6 +1717,76 @@ struct DrawMapView: UIViewRepresentable {
             }
         }
 
+        // MARK: - DriftFix v2.9 修改线路（拖动改点 / 轻点删点）
+
+        private func nearestVertex(_ mv: MKMapView, at point: CGPoint) -> (Int, Int)? {
+            var best: (Int, Int)? = nil
+            var bestD = CGFloat.greatestFiniteMagnitude
+            for (s, stroke) in parent.strokes.enumerated() {
+                for (i, c) in stroke.enumerated() {
+                    let p = mv.convert(c, toPointTo: mv)
+                    let dx = p.x - point.x
+                    let dy = p.y - point.y
+                    let d = (dx * dx + dy * dy).squareRoot()
+                    if d < bestD { bestD = d; best = (s, i) }
+                }
+            }
+            return bestD <= 36 ? best : nil
+        }
+
+        @objc func handleEditDrag(_ g: UILongPressGestureRecognizer) {
+            guard parent.editingEnabled, let mv = g.view as? MKMapView else { return }
+            let p = g.location(in: mv)
+            switch g.state {
+            case .began:
+                guard let hit = nearestVertex(mv, at: p) else { editDrag = nil; return }
+                let anchor = parent.strokes[hit.0][hit.1]
+                let radius = 30.0
+                var members: [(idx: Int, origin: CLLocationCoordinate2D, weight: Double)] = []
+                for (idx, c) in parent.strokes[hit.0].enumerated() {
+                    let d = CLLocation(latitude: c.latitude, longitude: c.longitude)
+                        .distance(from: CLLocation(latitude: anchor.latitude, longitude: anchor.longitude))
+                    if d <= radius {
+                        members.append((idx, c, 1.0 - (d / radius) * 0.85))
+                    }
+                }
+                editDrag = EditDrag(stroke: hit.0, anchor: anchor, members: members)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            case .changed:
+                guard let drag = editDrag, parent.strokes.indices.contains(drag.stroke) else { return }
+                let c = mv.convert(p, toCoordinateFrom: mv)
+                let dLat = c.latitude - drag.anchor.latitude
+                let dLon = c.longitude - drag.anchor.longitude
+                for m in drag.members where parent.strokes[drag.stroke].indices.contains(m.idx) {
+                    parent.strokes[drag.stroke][m.idx] = CLLocationCoordinate2D(
+                        latitude: m.origin.latitude + dLat * m.weight,
+                        longitude: m.origin.longitude + dLon * m.weight
+                    )
+                }
+                syncOverlay(mv, strokes: parent.strokes, preview: parent.previewPoints)
+            case .ended, .cancelled, .failed:
+                editDrag = nil
+            default:
+                break
+            }
+        }
+
+        @objc func handleEditTap(_ g: UITapGestureRecognizer) {
+            guard parent.editingEnabled, let mv = g.view as? MKMapView else { return }
+            guard let hit = nearestVertex(mv, at: g.location(in: mv)) else { return }
+            guard parent.strokes.indices.contains(hit.0), parent.strokes[hit.0].indices.contains(hit.1) else { return }
+            let anchor = parent.strokes[hit.0][hit.1]
+            let radius = 25.0
+            let kept = parent.strokes[hit.0].filter {
+                CLLocation(latitude: $0.latitude, longitude: $0.longitude)
+                    .distance(from: CLLocation(latitude: anchor.latitude, longitude: anchor.longitude)) > radius
+            }
+            parent.strokes[hit.0] = kept
+            if kept.isEmpty { parent.strokes.remove(at: hit.0) }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            syncOverlay(mv, strokes: parent.strokes, preview: parent.previewPoints)
+        }
+
         func syncOverlay(_ mv: MKMapView, strokes: [[CLLocationCoordinate2D]], preview: [CLLocationCoordinate2D]?) {
             for o in mv.overlays where o is MKPolyline { mv.removeOverlay(o) }
             for s in strokes where s.count >= 2 {
@@ -1584,4 +1813,82 @@ struct DrawMapView: UIViewRepresentable {
             return MKOverlayRenderer(overlay: overlay)
         }
     }
+}
+
+// MARK: - DriftFix v2.9: 连续选点地图（长按放点、编号、可单个删除）
+struct MultiPickMapView: UIViewRepresentable {
+    @Binding var points: [CLLocationCoordinate2D]
+    @Binding var moveToRegion: MKCoordinateRegion?
+
+    func makeUIView(context: Context) -> MKMapView {
+        let mv = MKMapView()
+        mv.delegate = context.coordinator
+        mv.isPitchEnabled = false
+        mv.isRotateEnabled = false
+        mv.showsCompass = false
+        mv.pointOfInterestFilter = .includingAll
+
+        let lp = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+        lp.minimumPressDuration = 0.28
+        lp.allowableMovement = 24
+        mv.addGestureRecognizer(lp)
+        return mv
+    }
+
+    func updateUIView(_ uiView: MKMapView, context: Context) {
+        if let region = moveToRegion {
+            uiView.setRegion(region, animated: true)
+            DispatchQueue.main.async { self.moveToRegion = nil }
+        }
+        context.coordinator.sync(uiView, points: points)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: MultiPickMapView
+        var lastSig: String = "-"
+        init(_ parent: MultiPickMapView) { self.parent = parent }
+
+        @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
+            guard let mv = g.view as? MKMapView else { return }
+            guard g.state == .began else { return }
+            let p = g.location(in: mv)
+            let c = mv.convert(p, toCoordinateFrom: mv)
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            parent.points.append(c)
+        }
+
+        func sync(_ mv: MKMapView, points: [CLLocationCoordinate2D]) {
+            let sig = points.map { String(format: "%.6f,%.6f", $0.latitude, $0.longitude) }.joined(separator: "|")
+            if sig == lastSig { return }
+            lastSig = sig
+            mv.removeAnnotations(mv.annotations.filter { $0 is NumberedPointAnnotation })
+            for (i, c) in points.enumerated() {
+                let a = NumberedPointAnnotation()
+                a.coordinate = c
+                a.index = i + 1
+                mv.addAnnotation(a)
+            }
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let np = annotation as? NumberedPointAnnotation else { return nil }
+            let id = "NumberedPoint"
+            let view = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation: np, reuseIdentifier: id)
+            view.annotation = np
+            view.canShowCallout = false
+            view.markerTintColor = .systemBlue
+            view.glyphText = "\(np.index)"
+            view.displayPriority = .required
+            view.animatesWhenAdded = false
+            return view
+        }
+    }
+}
+
+final class NumberedPointAnnotation: NSObject, MKAnnotation {
+    @objc dynamic var coordinate: CLLocationCoordinate2D = CLLocationCoordinate2D()
+    var index: Int = 0
 }
