@@ -2192,8 +2192,8 @@ struct AreaSelectMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
+        // 框选模式只禁单指拖动（留给画框），双指缩放保留——框大区域前需要先缩小看一眼
         uiView.isScrollEnabled = !selecting
-        uiView.isZoomEnabled = !selecting
         if let region = moveToRegion {
             uiView.setRegion(region, animated: true)
             DispatchQueue.main.async { self.moveToRegion = nil }
