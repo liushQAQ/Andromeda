@@ -1392,14 +1392,11 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     private func updateLocation(at index: Int) {
         guard index < routePoints.count else { return }
-        var coord = routePoints[index]
-        
-        // MARK: - Human-like Realism
-        // Add tiny random jitter (0.5 - 1.5 meters) to look less "robotic"
-        let latJitter = Double.random(in: -0.00001...0.00001)
-        let lngJitter = Double.random(in: -0.00001...0.00001)
-        coord.latitude += latJitter
-        coord.longitude += lngJitter
+        // DriftFix v3.2 去掉坐标随机抖动：原来每个点 ±0.00001°(约±1.1m) 随机偏移，
+        // 1Hz 下等于每秒横向甩一次，叠在 1.4m/s 的步进上就是肉眼可见的锯齿/漂移。
+        // LocSuper 扫街之所以"选什么样就走什么样"，就是因为它一个字都不改地照发折线点。
+        // 真实感靠速度区间随机游走实现，不靠坐标噪声。
+        let coord = routePoints[index]
         
         // DriftFix: 显示层坐标 —— polyline 判为 WGS 时转 GCJ，否则原样
         let displayCoord = polylineIsWGS ? CoordTransform.wgs84ToGcj02(coord) : coord
