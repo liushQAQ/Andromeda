@@ -36,12 +36,8 @@ jobs:
           test "$NAME" = "自由轨迹" || { echo "构建产物应用名被构建设置覆盖，实际=$NAME"; exit 1; }
           test "$VER" = "2.7.0-freetrack" || { echo "版本号不符，实际=$VER"; exit 1; }
           test "$BLD" = "15" || { echo "构建号不符，实际=$BLD"; exit 1; }
-          test -f "build/DerivedData/Build/Products/Debug-iphoneos/Geranium.app/InjectorBin/LiushJoyRunSteps.dylib" \
-            || { echo "注入插件没被打进 App（InjectorBin 缺失）"; exit 1; }
-          test -f "build/DerivedData/Build/Products/Debug-iphoneos/Geranium.app/InjectorBin/insert_dylib" \
-            || { echo "注入工具没被打进 App（insert_dylib 缺失）"; exit 1; }
 
-      - name: Assemble TIPA（免签 + ldid entitlements + RootHelper + 注入工具）
+      - name: Assemble TIPA（免签 + ldid entitlements + RootHelper）
         run: |
           APP_SRC="build/DerivedData/Build/Products/Debug-iphoneos/Geranium.app"
           test -d "$APP_SRC"
@@ -54,12 +50,6 @@ jobs:
           ldid -Sentitlements.plist build/Geranium.app/Geranium
           ldid -S"Bookmark Location in Geranium/entitlements.plist" \
             "build/Geranium.app/PlugIns/Bookmark Location in Geranium.appex/Bookmark Location in Geranium"
-          # 注入工具（ldid / insert_dylib）与插件本体：逐个假签 + 可执行位
-          chmod -R 755 build/Geranium.app/InjectorBin
-          for f in build/Geranium.app/InjectorBin/*; do
-            ldid -S "$f" || { echo "签名失败: $f"; exit 1; }
-          done
-          ls -la build/Geranium.app/InjectorBin
           cd build
           rm -rf Payload
           mkdir Payload
@@ -78,17 +68,15 @@ jobs:
               "1. 新增区域自动：框一块地方，只设起终点就能自动跑。",
               "2. 定好要跑几公里，走不满会自己在区域里接着绕。",
               "3. 区域内尽量沿地图上的道路走，蛇形绕行不来回交叉。",
-              "4. 装 App 时步数插件一起装好，不用再单独装第二个。",
-              "5. 设置页能一键给悦跑圈或咕咚注入步数插件。",
-              "6. 注入失败自动还原，不会把 App 弄成打不开。",
-              "7. 地图选途经点一次打开，长按连点，一次保存。",
-              "8. 往返和起终点互换分成两个开关，说明写清楚。",
-              "9. 手画线路能改，笔画自动保存，不用整条重画。",
+              "4. 地图选途经点一次打开，长按连点，一次保存。",
+              "5. 往返和起终点互换分成两个开关，说明写清楚。",
+              "6. 手画线路能改，笔画自动保存，不用整条重画。",
+              "7. 步数插件仍单独安装，不与本 App 打包在一起。",
           ])
           data = {
               "version": "2.7.0-freetrack",
               "build": 15,
-              "title": "自由轨迹 v2.7.0（区域自动漫游 + 插件合并）",
+              "title": "自由轨迹 v2.7.0（区域自动漫游）",
               "changelog": changelog,
               "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.0-freetrack/Geranium-2.7.0-freetrack.tipa",
               "min_ios": "15.0",
@@ -112,18 +100,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.7.0-freetrack
-          name: "自由轨迹 2.7.0（区域自动漫游 + 插件合并）"
+          name: "自由轨迹 2.7.0（区域自动漫游）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
             1. 新增区域自动：框一块地方，只设起终点就能自动跑。
             2. 定好要跑几公里，走不满会自己在区域里接着绕。
             3. 区域内尽量沿地图上的道路走，蛇形绕行不来回交叉。
-            4. 装 App 时步数插件一起装好，不用再单独装第二个。
-            5. 设置页能一键给悦跑圈或咕咚注入步数插件。
-            6. 注入失败自动还原，不会把 App 弄成打不开。
-            7. 地图选途经点一次打开，长按连点，一次保存。
-            8. 往返和起终点互换分成两个开关，说明写清楚。
-            9. 手画线路能改，笔画自动保存，不用整条重画。
+            4. 地图选途经点一次打开，长按连点，一次保存。
+            5. 往返和起终点互换分成两个开关，说明写清楚。
+            6. 手画线路能改，笔画自动保存，不用整条重画。
+            7. 步数插件仍单独安装，不与本 App 打包在一起。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
             Geranium-2.7.0-freetrack.tipa

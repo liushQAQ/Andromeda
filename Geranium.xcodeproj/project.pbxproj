@@ -108,16 +108,14 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/Geranium/GeraniumRootHelper",
-				"$(SRCROOT)/Geranium/Injector",
 			);
 			name = "Copy RootHelper";
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/GeraniumRootHelper",
-				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/InjectorBin/ldid",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "cp \"${SRCROOT}/Geranium/GeraniumRootHelper\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\nchmod +x \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\nrm -rf \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/InjectorBin\"\ncp -R \"${SRCROOT}/Geranium/Injector\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/InjectorBin\"\nchmod +x \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/InjectorBin/\"*\n";
+			shellScript = "cp \"${SRCROOT}/Geranium/GeraniumRootHelper\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\nchmod +x \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/GeraniumRootHelper\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
