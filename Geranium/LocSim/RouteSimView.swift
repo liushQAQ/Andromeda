@@ -35,6 +35,11 @@ struct RouteSimSheet: View {
     @State private var showMapPicker: Bool = false
     @State private var pickerRegion: MKCoordinateRegion? = nil
     @State private var pickerPoints: [CLLocationCoordinate2D] = []
+    // DriftFix v3.0 区域自动绕行
+    @State private var showAreaPicker: Bool = false
+    @State private var areaSelecting: Int = 1          // 0=移动地图 1=框选区域
+    @State private var areaPickerRegion: MKCoordinateRegion? = nil
+    @State private var areaDraft: RouteSimulator.AreaRect? = nil
     @State private var showDrawOverlay: Bool = false
     @State private var optimizedPoints: [CLLocationCoordinate2D]? = nil
     @State private var drawPreviewOn: Bool = false
@@ -112,6 +117,8 @@ struct RouteSimSheet: View {
                         // MARK: - DriftFix v2.4 模式相关区块
                         if routeSimulator.routeMode == .draw {
                             drawHintCard
+                        } else if routeSimulator.routeMode == .area {
+                            areaSection
                         } else {
                             addWaypointCard
                             waypointsSection
@@ -134,19 +141,22 @@ struct RouteSimSheet: View {
                                         } else {
                                             Image(systemName: "point.topleft.down.to.point.bottomright.curvepath.fill")
                                         }
-                                        Text(routeSimulator.isCalculatingRoute ? "算路中..." : "生成路线")
+                                        Text(routeSimulator.isCalculatingRoute ? "算路中..." : (routeSimulator.routeMode == .area ? "生成区域路线" : "生成路线"))
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding()
                                     .background(
                                         RoundedRectangle(cornerRadius: 14)
-                                            .fill(routeSimulator.userWaypoints.count >= 2 ?
-                                                  Color.indigo : Color.gray)
+                                            .fill((routeSimulator.userWaypoints.count >= 2
+                                                   && (routeSimulator.routeMode != .area || routeSimulator.areaRect != nil))
+                                                  ? Color.indigo : Color.gray)
                                     )
                                     .foregroundColor(.white)
                                     .font(.headline)
                                 }
-                        .disabled(routeSimulator.userWaypoints.count < 2 || routeSimulator.isCalculatingRoute)
+                        .disabled(routeSimulator.userWaypoints.count < 2
+                                  || routeSimulator.isCalculatingRoute
+                                  || (routeSimulator.routeMode == .area && routeSimulator.areaRect == nil))
                         .padding(.horizontal)
                         
                         // MARK: - Route Selection (shown after calculation)
@@ -300,6 +310,10 @@ struct RouteSimSheet: View {
 
         if showDrawOverlay {
             drawOverlay
+        }
+
+        if showAreaPicker {
+            areaPickerOverlay
         }
         }
     }
@@ -511,7 +525,7 @@ struct RouteSimSheet: View {
                         routeReady = false
                     }) {
                         VStack(spacing: 4) {
-                            Image(systemName: m == .road ? "road.lanes" : (m == .draw ? "hand.draw" : "point.topleft.down.to.point.bottomright.curvepath"))
+                            Image(systemName: modeIcon(m))
                             Text(m.label).font(.caption)
                         }
                         .frame(maxWidth: .infinity)
@@ -531,14 +545,32 @@ struct RouteSimSheet: View {
                 }
             }
             .padding(.horizontal)
-            Text(routeSimulator.routeMode == .free
-                 ? "自由路线：按你选的点依序直线连接，完全不吸附路网——内部道路/园区/步行道随便走。"
-                 : (routeSimulator.routeMode == .draw
-                    ? "手画路线：在地图上按住拖动画出线路，系统自动平滑优化成自然步态轨迹。"
-                    : "道路导航：走真实路网；某段没有导航路线会直接报错，请改用自由路线（不再偷偷吸附替换）。"))
+            Text(routeModeHint(routeSimulator.routeMode))
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
+        }
+    }
+
+    private func modeIcon(_ m: RouteSimulator.RouteMode) -> String {
+        switch m {
+        case .road: return "road.lanes"
+        case .free: return "point.topleft.down.to.point.bottomright.curvepath"
+        case .draw: return "hand.draw"
+        case .area: return "rectangle.dashed"
+        }
+    }
+
+    private func routeModeHint(_ m: RouteSimulator.RouteMode) -> String {
+        switch m {
+        case .road:
+            return "道路导航：走真实路网；某段没有导航路线会直接报错，请改用自由路线（不再偷偷吸附替换）。"
+        case .free:
+            return "自由路线：按你选的点依序直线连接，完全不吸附路网——内部道路/园区/步行道随便走。"
+        case .draw:
+            return "手画路线：在地图上按住拖动画出线路，系统自动平滑优化成自然步态轨迹。"
+        case .area:
+            return "区域自动：只设起点和终点，再框一块区域、定一个目标公里数。中间怎么走系统自己排：先尽量贴地图上的道路，区域里蛇形绕行不来回交叉，走满公里数才停，不够就继续在区域里绕。"
         }
     }
 
@@ -680,6 +712,213 @@ struct RouteSimSheet: View {
         routeSimulator.addPickedWaypoints(pts)
         routeReady = false
         AlertKitAPI.present(title: "📍 已添加 \(pts.count) 个途经点", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
+    // MARK: - DriftFix v3.0 区域自动绕行（框选区域 + 目标公里数）
+    private var areaSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "rectangle.dashed")
+                    .foregroundColor(.purple)
+                Text("自动绕行区域")
+                    .font(.headline)
+                Spacer()
+                if let r = routeSimulator.areaRect {
+                    Text(r.summaryText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal)
+
+            HStack(spacing: 8) {
+                Button(action: openAreaPicker) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "map")
+                        Text(routeSimulator.areaRect == nil ? "框选区域" : "重新框选")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.purple.opacity(0.15)))
+                    .foregroundColor(.purple)
+                    .font(.subheadline.weight(.semibold))
+                }
+                if routeSimulator.areaRect != nil {
+                    Button(action: {
+                        routeSimulator.areaRect = nil
+                        routeReady = false
+                    }) {
+                        Text("清除")
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.red.opacity(0.12)))
+                            .foregroundColor(.red)
+                            .font(.subheadline)
+                    }
+                }
+            }
+            .padding(.horizontal)
+
+            HStack {
+                Text("目标")
+                    .font(.caption)
+                    .frame(width: 34)
+                Slider(value: $routeSimulator.areaTargetKm, in: 1...30, step: 0.5)
+                    .onChange(of: routeSimulator.areaTargetKm) { v in
+                        UserDefaults.standard.set(v, forKey: "andromedaAreaTargetKm")
+                        routeReady = false
+                    }
+                Text(String(format: "%.1f km", routeSimulator.areaTargetKm))
+                    .font(.caption)
+                    .frame(width: 58)
+            }
+            .padding(.horizontal)
+
+            Text("怎么走：起点先进区域 → 区域里按街道蛇形绕行（不会来回交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。贴路会稍微绕远，实际里程一般略多于目标。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            if routeSimulator.areaRect == nil {
+                Text("⚠️ 还没框选区域：点上面「框选区域」，在地图上按住从一个角拖到对角。")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal)
+            }
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
+    private var areaPickerOverlay: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("取消") {
+                    showAreaPicker = false
+                }
+                .foregroundColor(.red)
+                Spacer()
+                Text("框选区域")
+                    .font(.headline)
+                Spacer()
+                Button(action: commitArea) {
+                    Text(areaDraft == nil ? "保存" : "保存区域")
+                        .fontWeight(.semibold)
+                }
+                .disabled(areaDraft == nil)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            Picker("", selection: $areaSelecting) {
+                Text("移动地图").tag(0)
+                Text("框选区域").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            ZStack {
+                AreaSelectMapView(
+                    rect: $areaDraft,
+                    moveToRegion: $areaPickerRegion,
+                    selecting: areaSelecting == 1,
+                    start: routeSimulator.userWaypoints.first,
+                    end: routeSimulator.userWaypoints.count >= 2 ? routeSimulator.userWaypoints.last : nil
+                )
+                if areaDraft == nil {
+                    Text(areaSelecting == 1
+                         ? "按住地图，从一个角拖到对角，框出要绕行的区域"
+                         : "先移动/缩放地图到要走的范围，再切「框选区域」")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxHeight: .infinity)
+            .cornerRadius(12)
+            .padding(.horizontal, 12)
+
+            if let r = areaDraft {
+                Text(String(format: "区域约 %.2f × %.2f km（%.2f km²）",
+                            r.widthMeters / 1000, r.heightMeters / 1000,
+                            r.widthMeters * r.heightMeters / 1_000_000))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                Text("区域内有起点/终点标记时，会自动把它们圈进来参考")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+            }
+
+            Button(action: commitArea) {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text("使用这个区域")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(areaDraft == nil ? Color.gray : Color.purple)
+                )
+                .foregroundColor(.white)
+                .font(.headline)
+            }
+            .disabled(areaDraft == nil)
+            .padding(.horizontal)
+            .padding(.bottom, 10)
+        }
+        .background(Color(UIColor.systemBackground).ignoresSafeArea())
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .zIndex(12)
+    }
+
+    private func openAreaPicker() {
+        areaDraft = routeSimulator.areaRect
+        areaSelecting = routeSimulator.areaRect == nil ? 1 : 0
+        if let r = routeSimulator.areaRect {
+            areaPickerRegion = MKCoordinateRegion(center: r.center,
+                                                  latitudinalMeters: max(r.heightMeters * 1.6, 1500),
+                                                  longitudinalMeters: max(r.widthMeters * 1.6, 1500))
+        } else if routeSimulator.userWaypoints.count >= 2,
+                  let first = routeSimulator.userWaypoints.first,
+                  let last = routeSimulator.userWaypoints.last {
+            let mid = CLLocationCoordinate2D(latitude: (first.latitude + last.latitude) / 2,
+                                             longitude: (first.longitude + last.longitude) / 2)
+            let d = CLLocation(latitude: first.latitude, longitude: first.longitude)
+                .distance(from: CLLocation(latitude: last.latitude, longitude: last.longitude))
+            areaPickerRegion = MKCoordinateRegion(center: mid,
+                                                  latitudinalMeters: max(d * 1.8, 2000),
+                                                  longitudinalMeters: max(d * 1.8, 2000))
+        } else if let c = routeSimulator.userWaypoints.first ?? mapRegion?.center {
+            areaPickerRegion = MKCoordinateRegion(center: c,
+                                                  latitudinalMeters: 3000,
+                                                  longitudinalMeters: 3000)
+        }
+        showAreaPicker = true
+    }
+
+    private func commitArea() {
+        guard let r = areaDraft else { return }
+        guard r.widthMeters >= 150, r.heightMeters >= 150 else {
+            UIApplication.shared.alert(body: "区域太小：至少框 150 米见方。")
+            return
+        }
+        routeSimulator.areaRect = r
+        routeReady = false
+        showAreaPicker = false
+        mapRegion = MKCoordinateRegion(center: r.center,
+                                       latitudinalMeters: max(r.heightMeters * 1.3, 800),
+                                       longitudinalMeters: max(r.widthMeters * 1.3, 800))
+        AlertKitAPI.present(title: "区域已选 \(r.summaryText)", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     // MARK: - DriftFix v2.9 手画路线弹层（画笔 / 移动 / 修改 三模式，笔画常驻可反复改）
@@ -1369,6 +1608,38 @@ struct RouteSimSheet: View {
             showDrawOverlay = true
             return
         }
+        // DriftFix v3.0: 区域自动绕行
+        if routeSimulator.routeMode == .area {
+            guard let rect = routeSimulator.areaRect else {
+                UIApplication.shared.alert(body: "先在「自动绕行区域」里框一块区域。")
+                return
+            }
+            guard routeSimulator.userWaypoints.count >= 2,
+                  let s = routeSimulator.userWaypoints.first,
+                  let e = routeSimulator.userWaypoints.last else {
+                UIApplication.shared.alert(body: "先设好起点和终点。")
+                return
+            }
+            let minMps = speedMinKmh / 3.6
+            let maxMps = speedMaxKmh / 3.6
+            routeSimulator.travelMode = selectedMode
+            routeSimulator.buildAreaRoute(start: s,
+                                          end: e,
+                                          rect: rect,
+                                          targetMeters: routeSimulator.areaTargetKm * 1000,
+                                          minSpeed: minMps,
+                                          maxSpeed: maxMps,
+                                          snapToRoads: snapLongOn) { ok, message in
+                if ok {
+                    routeReady = true
+                    showRouteOnMap()
+                    if let msg = message { UIApplication.shared.alert(body: msg) }
+                } else {
+                    UIApplication.shared.alert(body: message ?? "区域算路失败")
+                }
+            }
+            return
+        }
         guard routeSimulator.userWaypoints.count >= 2 else { return }
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
@@ -1557,7 +1828,12 @@ struct RouteSimSheet: View {
                 loops: loopCount,
                 snapLong: snapLongOn,
                 waypoints: routeSimulator.userWaypoints.map { [$0.latitude, $0.longitude] },
-                waypointModes: routeSimulator.waypointModes
+                waypointModes: routeSimulator.waypointModes,
+                areaSouth: routeSimulator.areaRect?.south,
+                areaWest: routeSimulator.areaRect?.west,
+                areaNorth: routeSimulator.areaRect?.north,
+                areaEast: routeSimulator.areaRect?.east,
+                areaTargetKm: routeSimulator.areaRect == nil ? nil : routeSimulator.areaTargetKm
             )
             if routeSimulator.saveCurrentRoute(named: name, meta: meta) {
                 savedRoutes = RouteSimulator.savedRouteInfos(sort: savedSort)
@@ -1891,4 +2167,144 @@ struct MultiPickMapView: UIViewRepresentable {
 final class NumberedPointAnnotation: NSObject, MKAnnotation {
     @objc dynamic var coordinate: CLLocationCoordinate2D = CLLocationCoordinate2D()
     var index: Int = 0
+}
+
+// MARK: - DriftFix v3.0: 区域框选地图（切「框选区域」后按住拖出一个矩形）
+struct AreaSelectMapView: UIViewRepresentable {
+    @Binding var rect: RouteSimulator.AreaRect?
+    @Binding var moveToRegion: MKCoordinateRegion?
+    var selecting: Bool
+    var start: CLLocationCoordinate2D?
+    var end: CLLocationCoordinate2D?
+
+    func makeUIView(context: Context) -> MKMapView {
+        let mv = MKMapView()
+        mv.delegate = context.coordinator
+        mv.isPitchEnabled = false
+        mv.isRotateEnabled = false
+        mv.showsCompass = false
+        mv.pointOfInterestFilter = .includingAll
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
+        mv.addGestureRecognizer(pan)
+        return mv
+    }
+
+    func updateUIView(_ uiView: MKMapView, context: Context) {
+        uiView.isScrollEnabled = !selecting
+        uiView.isZoomEnabled = !selecting
+        if let region = moveToRegion {
+            uiView.setRegion(region, animated: true)
+            DispatchQueue.main.async { self.moveToRegion = nil }
+        }
+        context.coordinator.sync(uiView, rect: rect, start: start, end: end)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: AreaSelectMapView
+        private var anchor: CLLocationCoordinate2D? = nil
+        private var draft: MKPolygon? = nil
+        private var lastSig: String = "-"
+
+        init(_ parent: AreaSelectMapView) { self.parent = parent }
+
+        @objc func handlePan(_ g: UIPanGestureRecognizer) {
+            guard parent.selecting, let mv = g.view as? MKMapView else { return }
+            let c = mv.convert(g.location(in: mv), toCoordinateFrom: mv)
+            switch g.state {
+            case .began:
+                anchor = c
+            case .changed:
+                guard let a = anchor else { return }
+                if let old = draft { mv.removeOverlay(old) }
+                let poly = Self.polygon(RouteSimulator.AreaRect.from(a, c))
+                draft = poly
+                mv.addOverlay(poly)
+            case .ended, .cancelled, .failed:
+                guard let a = anchor else { return }
+                anchor = nil
+                let r = RouteSimulator.AreaRect.from(a, c)
+                if r.widthMeters >= 150 && r.heightMeters >= 150 {
+                    parent.rect = r
+                }
+            default:
+                break
+            }
+        }
+
+        static func polygon(_ r: RouteSimulator.AreaRect) -> MKPolygon {
+            var coords: [CLLocationCoordinate2D] = [
+                CLLocationCoordinate2D(latitude: r.south, longitude: r.west),
+                CLLocationCoordinate2D(latitude: r.south, longitude: r.east),
+                CLLocationCoordinate2D(latitude: r.north, longitude: r.east),
+                CLLocationCoordinate2D(latitude: r.north, longitude: r.west)
+            ]
+            return MKPolygon(coordinates: &coords, count: 4)
+        }
+
+        func sync(_ mv: MKMapView, rect: RouteSimulator.AreaRect?, start: CLLocationCoordinate2D?, end: CLLocationCoordinate2D?) {
+            let rectSig = rect.map { String(format: "%.6f,%.6f,%.6f,%.6f", $0.south, $0.west, $0.north, $0.east) } ?? "-"
+            let startSig = start.map { String(format: "%.6f,%.6f", $0.latitude, $0.longitude) } ?? "-"
+            let endSig = end.map { String(format: "%.6f,%.6f", $0.latitude, $0.longitude) } ?? "-"
+            let sig = rectSig + "|" + startSig + "|" + endSig
+            if sig == lastSig { return }
+            lastSig = sig
+
+            for o in mv.overlays where o is MKPolygon { mv.removeOverlay(o) }
+            draft = nil
+            if let r = rect, r.isValid {
+                let poly = Self.polygon(r)
+                draft = poly
+                mv.addOverlay(poly)
+            }
+            mv.removeAnnotations(mv.annotations.filter { $0 is AreaPinAnnotation })
+            if let s = start {
+                mv.addAnnotation(AreaPinAnnotation(coordinate: s, title: "起", tint: .systemGreen))
+            }
+            if let e = end {
+                mv.addAnnotation(AreaPinAnnotation(coordinate: e, title: "终", tint: .systemRed))
+            }
+        }
+
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let poly = overlay as? MKPolygon {
+                let r = MKPolygonRenderer(polygon: poly)
+                r.fillColor = UIColor.systemPurple.withAlphaComponent(0.15)
+                r.strokeColor = UIColor.systemPurple
+                r.lineWidth = 2
+                r.lineDashPattern = [NSNumber(value: 6), NSNumber(value: 4)]
+                return r
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let a = annotation as? AreaPinAnnotation else { return nil }
+            let id = "AreaPin"
+            let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation: a, reuseIdentifier: id)
+            v.annotation = a
+            v.canShowCallout = false
+            v.markerTintColor = a.tint
+            v.glyphText = a.title
+            v.displayPriority = .required
+            v.animatesWhenAdded = false
+            return v
+        }
+    }
+}
+
+final class AreaPinAnnotation: NSObject, MKAnnotation {
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+    var title: String?
+    var tint: UIColor
+    init(coordinate: CLLocationCoordinate2D, title: String, tint: UIColor) {
+        self.coordinate = coordinate
+        self.title = title
+        self.tint = tint
+        super.init()
+    }
 }

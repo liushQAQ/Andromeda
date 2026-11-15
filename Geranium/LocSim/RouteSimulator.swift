@@ -98,6 +98,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var routeMode: RouteMode = .road
     @Published var userWaypoints: [CLLocationCoordinate2D] = []   // 用户点列(GCJ 显示系)，顺序=起→途经→终
     @Published var waypointModes: [Bool] = []                     // 与 userWaypoints 对齐：true=随机(每次洗牌)，false=固定顺序
+    @Published var areaRect: AreaRect? = nil                      // DriftFix v3.0: 自动绕行区域（框选）
+    @Published var areaTargetKm: Double = 5.0                     // DriftFix v3.0: 目标里程（公里）
     @Published var visitSequenceText: String = ""                 // 本次实际访问顺序（起→#3→#1→终）
     @Published var estimatedMeters: Double = 0                    // DriftFix v2.6: 预估总里程（米）
     @Published var estimatedSteps: Int = 0                        // DriftFix v2.6: 预估步数 = 里程 ÷ 步幅
@@ -134,6 +136,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let raw = UserDefaults.standard.string(forKey: "andromedaRouteMode"),
            let saved = RouteMode(rawValue: raw) {
             routeMode = saved
+        }
+        if let km = UserDefaults.standard.object(forKey: "andromedaAreaTargetKm") as? Double, km >= 0.5 {
+            areaTargetKm = km
         }
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
@@ -284,13 +289,54 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         case road = "road"
         case free = "free"
         case draw = "draw"
+        case area = "area"
         var id: String { rawValue }
         var label: String {
             switch self {
             case .road: return "道路导航"
             case .free: return "自由路线"
             case .draw: return "手画路线"
+            case .area: return "区域自动"
             }
+        }
+    }
+
+    // MARK: - DriftFix v3.0 区域内自动绕行
+    // 老总需求：只给起点和终点 + 框一块大区域 + 目标公里数；中间怎么走自动决定，
+    // 走满公里数才停，不够就在区域内继续绕；尽量走地图已有的道路、不来回交叉。
+    // 做法：区域按长边切成等距「车道」，蛇形（弓字形）串起来——天然不交叉；
+    // 每段锚点交给 MKDirections 步行算路贴街道，失败/绕太远则自然弯兜底。
+    struct AreaRect: Equatable {
+        var south: Double
+        var west: Double
+        var north: Double
+        var east: Double
+
+        static func from(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> AreaRect {
+            AreaRect(south: min(a.latitude, b.latitude),
+                     west: min(a.longitude, b.longitude),
+                     north: max(a.latitude, b.latitude),
+                     east: max(a.longitude, b.longitude))
+        }
+
+        var isValid: Bool { north > south && east > west }
+
+        var center: CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: (south + north) / 2, longitude: (west + east) / 2)
+        }
+
+        var widthMeters: Double {
+            CLLocation(latitude: center.latitude, longitude: west)
+                .distance(from: CLLocation(latitude: center.latitude, longitude: east))
+        }
+
+        var heightMeters: Double {
+            CLLocation(latitude: south, longitude: center.longitude)
+                .distance(from: CLLocation(latitude: north, longitude: center.longitude))
+        }
+
+        var summaryText: String {
+            String(format: "%.2f × %.2f km", widthMeters / 1000, heightMeters / 1000)
         }
     }
 
@@ -936,6 +982,262 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         runLeg(0)
     }
     
+    // MARK: - DriftFix v3.0 区域自动绕行（框选区域 → 蛇形覆盖 → 走满目标公里数 → 回到终点）
+
+    private struct AreaPlan {
+        var spacing: Double
+        var laps: Int
+    }
+
+    /// 选一个车道间距，让「单圈蛇形长度」尽量贴住目标里程；目标太大就多绕几圈。
+    private func planArea(rect: AreaRect, targetMeters: Double) -> AreaPlan {
+        let spanX = max(rect.widthMeters, 1)
+        let spanY = max(rect.heightMeters, 1)
+        let useEW = spanX >= spanY
+        let laneLen = (useEW ? spanX : spanY) * 0.92
+        let stepLen = (useEW ? spanY : spanX) * 0.92
+        // 从密到疏扫一遍，取「最稀疏但仍够目标」的那一档——区域大、目标小时不会硬塞几十条车道
+        var spacing = 400.0
+        var found = false
+        var s = 60.0
+        while s <= 400.0 {
+            let n = max(2, min(40, Int(stepLen / s) + 1))
+            let realStep = stepLen / Double(n - 1)
+            let capacity = Double(n) * laneLen + Double(n - 1) * realStep + laneLen * 0.35
+            if capacity >= targetMeters * 1.02 {
+                spacing = s
+                found = true
+            }
+            s += 10
+        }
+        if !found {
+            // 连 2% 余量都凑不出：最稀疏一档仍够目标就取它，否则最密 + 多绕几圈
+            let nMax = max(2, min(40, Int(stepLen / 400.0) + 1))
+            let realMax = stepLen / Double(nMax - 1)
+            let capMax = Double(nMax) * laneLen + Double(nMax - 1) * realMax + laneLen * 0.35
+            spacing = capMax >= targetMeters ? 400.0 : 60.0
+        }
+        let n = max(2, min(40, Int(stepLen / spacing) + 1))
+        let realStep = stepLen / Double(n - 1)
+        let cap = Double(n) * laneLen + Double(n - 1) * realStep + laneLen * 0.35
+        var laps = 1
+        if cap < targetMeters {
+            laps = min(8, Int(ceil(targetMeters / max(cap, 1.0))))
+        }
+        return AreaPlan(spacing: spacing, laps: laps)
+    }
+
+    /// 区域蛇形锚点：沿长边切车道，奇偶行反向，端到端相连——几何上不会交叉。
+    /// 每 ≈350m 放一个锚点，交给步行导航贴街道用。
+    private func areaSerpentine(rect: AreaRect, spacing: Double, startFrom: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
+        let c = rect.center
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(c.latitude * Double.pi / 180)
+        guard lonScale > 1 else { return [] }
+        let halfW = rect.widthMeters / 2 * 0.92
+        let halfH = rect.heightMeters / 2 * 0.92
+        let useEW = rect.widthMeters >= rect.heightMeters
+        let laneHalf = useEW ? halfW : halfH
+        let stepHalf = useEW ? halfH : halfW
+        guard laneHalf > 40, stepHalf > 40 else { return [] }
+
+        let n = max(2, min(40, Int((stepHalf * 2) / max(spacing, 40)) + 1))
+        let perLane = max(1, Int((laneHalf * 2) / 350.0))
+        var pts: [CLLocationCoordinate2D] = []
+        for i in 0..<n {
+            let t = n > 1 ? Double(i) / Double(n - 1) : 0
+            let v = -stepHalf + stepHalf * 2 * t
+            let forward = i % 2 == 0
+            let fromX = useEW ? (forward ? -laneHalf : laneHalf) : v
+            let fromY = useEW ? v : (forward ? -laneHalf : laneHalf)
+            let toX = useEW ? (forward ? laneHalf : -laneHalf) : v
+            let toY = useEW ? v : (forward ? laneHalf : -laneHalf)
+            for j in 0...perLane {
+                let f = Double(j) / Double(perLane)
+                let x = fromX + (toX - fromX) * f
+                let y = fromY + (toY - fromY) * f
+                pts.append(CLLocationCoordinate2D(latitude: c.latitude + y / latScale,
+                                                  longitude: c.longitude + x / lonScale))
+            }
+        }
+        if let first = pts.first, let last = pts.last,
+           distanceBetween(first, startFrom) > distanceBetween(last, startFrom) {
+            pts.reverse()
+        }
+        return pts
+    }
+
+    /// 区域比目标里程大太多时，只在区域中心取一块子区域来绕——
+    /// 否则「5km 见方 + 5km 目标」会被迫走出 15km（蛇形最少也要两条满宽车道）。
+    /// 车道总长约等于 面积 ÷ 车道间距，所以按 sqrt 比例缩小，迭代几次收敛。
+    private func fitAreaRect(_ rect: AreaRect, targetMeters: Double) -> AreaRect {
+        let want = targetMeters * 1.15
+        let c = rect.center
+        var scale = 1.0
+        var result = rect
+        for _ in 0..<5 {
+            let laneSpan = max(result.widthMeters, result.heightMeters) * 0.92
+            let stepSpan = min(result.widthMeters, result.heightMeters) * 0.92
+            let lanes = max(2, min(40, Int(stepSpan / 150.0) + 1))
+            let capacity = Double(lanes) * laneSpan + stepSpan + laneSpan * 0.35
+            if capacity <= want * 1.25 { break }
+            let next = max(0.05, min(0.98, scale * sqrt(want / capacity)))
+            if abs(next - scale) < 0.03 { break }
+            scale = next
+            let candidate = AreaRect(south: c.latitude - (c.latitude - rect.south) * scale,
+                                     west: c.longitude - (c.longitude - rect.west) * scale,
+                                     north: c.latitude + (rect.north - c.latitude) * scale,
+                                     east: c.longitude + (rect.east - c.longitude) * scale)
+            if candidate.widthMeters < 160 || candidate.heightMeters < 160 { break }
+            result = candidate
+        }
+        return result
+    }
+
+    /// 区域自动线路：起点 → 区域蛇形 → 终点。每段先试步行导航贴真实街道（容忍 300m 端点偏差、
+    /// 2.2 倍绕远），拿不到就自然弯兜底；全程平滑 + 变速 1Hz 重采样。
+    func buildAreaRoute(start: CLLocationCoordinate2D,
+                        end: CLLocationCoordinate2D,
+                        rect: AreaRect,
+                        targetMeters: Double,
+                        minSpeed: Double,
+                        maxSpeed: Double,
+                        snapToRoads: Bool,
+                        completion: @escaping (Bool, String?) -> Void) {
+        guard rect.isValid else { completion(false, "请先在地图上框选一块区域"); return }
+        guard rect.widthMeters >= 150, rect.heightMeters >= 150 else {
+            completion(false, "区域太小：至少框 150 米见方")
+            return
+        }
+        let target = max(targetMeters, 500)
+        isCalculatingRoute = true
+        availableRoutes = []
+        allRoutePolylines = []
+        selectedRouteIndex = 0
+
+        let area = fitAreaRect(rect, targetMeters: target)
+        let plan = planArea(rect: area, targetMeters: target)
+        var anchors: [CLLocationCoordinate2D] = [start]
+        var cursor = start
+        for _ in 0..<plan.laps {
+            let lanes = areaSerpentine(rect: area, spacing: plan.spacing, startFrom: cursor)
+            if lanes.count < 2 { break }
+            anchors.append(contentsOf: lanes)
+            cursor = lanes[lanes.count - 1]
+        }
+        anchors.append(end)
+
+        var path: [CLLocationCoordinate2D] = []
+        var legIndex = 0
+
+        func appendLeg(_ seg: [CLLocationCoordinate2D]) {
+            guard !seg.isEmpty else { return }
+            if let last = path.last, let first = seg.first, self.distanceBetween(last, first) < 1.0 {
+                path.append(contentsOf: seg.dropFirst())
+            } else {
+                path.append(contentsOf: seg)
+            }
+        }
+
+        func finish() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.isCalculatingRoute = false
+                guard path.count >= 2 else {
+                    completion(false, "区域算路失败：换一个区域再试")
+                    return
+                }
+                var shaped = self.smoothPolyline(path, passes: 2)
+                guard shaped.count >= 2 else {
+                    completion(false, "区域算路失败：换一个区域再试")
+                    return
+                }
+                shaped[0] = start
+                shaped[shaped.count - 1] = end
+                let resampled = self.interpolateVariableRoute(coords: shaped,
+                                                              minSpeed: minSpeed,
+                                                              maxSpeed: maxSpeed,
+                                                              interval: self.updateInterval)
+                self.polylineIsWGS = false
+                self.routePoints = resampled.count >= 2 ? resampled : shaped
+                self.totalPoints = self.routePoints.count
+                self.currentPointIndex = 0
+                self.progress = 0.0
+                self.isSimulating = false
+                self.isPaused = false
+                self.currentPosition = nil
+                self.routePolyline = MKPolyline(coordinates: shaped, count: shaped.count)
+
+                var meters: Double = 0
+                for i in 1..<shaped.count {
+                    meters += self.distanceBetween(shaped[i - 1], shaped[i])
+                }
+                let eff = max((minSpeed + maxSpeed) / 2, 0.2)
+                let secs = meters / eff
+                let m = Int(secs) / 60
+                self.estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+                self.estimatedMeters = meters
+                self.estimatedSteps = Int(meters / self.strideForEstimate)
+                if meters < target * 0.95 {
+                    completion(true, "区域内只走出 \(Int(meters)) 米，没到目标；把区域框大一点再生成一次")
+                } else {
+                    completion(true, nil)
+                }
+            }
+        }
+
+        func step() {
+            if legIndex >= anchors.count - 1 {
+                finish()
+                return
+            }
+            let from = anchors[legIndex]
+            let to = anchors[legIndex + 1]
+            let d = self.distanceBetween(from, to)
+            let idx = legIndex
+            legIndex += 1
+            if !snapToRoads || d < 60 || idx >= 28 {
+                appendLeg(self.curvedSegment(from: from, to: to))
+                step()
+                return
+            }
+            let request = MKDirections.Request()
+            request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
+            request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
+            request.transportType = .walking
+            request.requestsAlternateRoutes = false
+            MKDirections(request: request).calculate { [weak self] response, _ in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    var used = false
+                    if let best = response?.routes.first, best.polyline.pointCount >= 2 {
+                        let pc = best.polyline.pointCount
+                        var coords = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: pc)
+                        best.polyline.getCoordinates(&coords, range: NSRange(location: 0, length: pc))
+                        if let f = coords.first, let l = coords.last {
+                            // 按段判基准：首点离请求起点 >200m 视为 WGS，否则本来就是 GCJ（防双重转换）
+                            let gcj = self.distanceBetween(f, from) > 200
+                                ? coords.map { CoordTransform.wgs84ToGcj02($0) }
+                                : coords
+                            if let gf = gcj.first, let gl = gcj.last {
+                                let df = self.distanceBetween(gf, from)
+                                let dt = self.distanceBetween(gl, to)
+                                let detour = best.distance / max(d, 1.0)
+                                if df <= 300 && dt <= 300 && detour <= 2.2 {
+                                    appendLeg(gcj)
+                                    used = true
+                                }
+                            }
+                        }
+                    }
+                    if !used { appendLeg(self.curvedSegment(from: from, to: to)) }
+                    step()
+                }
+            }
+        }
+        step()
+    }
+
     func startSimulation(altitude: Double = 0.0) {
         guard !routePoints.isEmpty else { return }
         self.altitude = altitude
@@ -1089,6 +1391,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         var snapLong: Bool = true
         var waypoints: [[Double]] = []      // 用户点列（GCJ 显示系，含起终点）
         var waypointModes: [Bool] = []
+        // DriftFix v3.0: 区域自动绕行（可选，老存档解出来是 nil）
+        var areaSouth: Double? = nil
+        var areaWest: Double? = nil
+        var areaNorth: Double? = nil
+        var areaEast: Double? = nil
+        var areaTargetKm: Double? = nil
     }
 
     struct RouteLoadResult {
@@ -1195,6 +1503,10 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             travelMode = TravelMode(rawValue: m.travelMode) ?? travelMode
             speedMinMps = m.speedMinKmh / 3.6
             speedMaxMps = m.speedMaxKmh / 3.6
+            if let s = m.areaSouth, let w = m.areaWest, let n = m.areaNorth, let e = m.areaEast {
+                areaRect = AreaRect(south: s, west: w, north: n, east: e)
+            }
+            if let t = m.areaTargetKm { areaTargetKm = t }
         }
         visitSequenceText = ""
         return RouteLoadResult(ok: true, meta: meta)
