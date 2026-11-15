@@ -58,7 +58,7 @@ struct RouteSimSheet: View {
     /// 出行方式走 AppStorage：选过就记住，重开面板不会跳回「驾车」
     private var selectedMode: TravelMode {
         get { TravelMode(rawValue: travelModeRaw) ?? .walking }
-        set { travelModeRaw = newValue.rawValue }
+        nonmutating set { travelModeRaw = newValue.rawValue }
     }
 
     private func refreshSavedRoutes() {
