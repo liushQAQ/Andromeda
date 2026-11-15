@@ -681,11 +681,14 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         runLeg(0)
     }
 
-    /// DriftFix v2.4 手画路线：简化（DP 5m）→ 平滑（2 轮）→ 变速重采样就绪。
+    /// DriftFix v3.1 手画路线：画什么就走什么（不再「先简化再平滑」）。
+    /// 血案：旧实现是 DP 5m 简化 + 2 轮平滑，简化后只剩几个拐点，平滑再把拐角削掉——
+    /// 实测 90° 直角网格最大偏离原画 69.6m、操场圆环 16.6m。用户看到的就是
+    /// 「一点开始，位置跟我画的不一样，漂移了」。现在原始笔画点只做 1.5m 去重，
+    /// 直接沿折线 1Hz 重采样，模拟点严格落在画出来的线上。
     func buildFromDrawnPath(points: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double) -> Bool {
         guard points.count >= 2 else { return false }
-        let simplified = simplifyPolyline(points, epsilon: 5.0)
-        let shaped = smoothPolyline(simplified, passes: 2)
+        let shaped = dedupeDrawnPoints(points, minMeters: 1.5)
         guard shaped.count >= 2 else { return false }
         let resampled = interpolateVariableRoute(coords: shaped, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
         polylineIsWGS = false
@@ -712,10 +715,66 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return true
     }
 
-    /// DriftFix v2.4 「AI 优化」：手画原始轨迹 → DP 简化(5m) → 两轮平滑 → 自然步态线路
+    /// DriftFix v3.1 「AI 优化」（显式开关才走）：DP 简化(5m) → 两轮平滑 → 再逐点拉回
+    /// 原画 2m 以内。平滑只做"手感变顺"，绝不允许把拐角削掉几十米。
     func optimizeDrawnPath(points: [CLLocationCoordinate2D]) -> [CLLocationCoordinate2D] {
         let simplified = simplifyPolyline(points, epsilon: 5.0)
-        return smoothPolyline(simplified, passes: 2)
+        let smoothed = smoothPolyline(simplified, passes: 2)
+        return clampToPolyline(smoothed, reference: points, maxOffset: 2.0)
+    }
+
+    /// 手画原始点去重（1.5m 内视为同一点）：不简化、不平滑，保证走线 = 画线。
+    private func dedupeDrawnPoints(_ pts: [CLLocationCoordinate2D], minMeters: Double) -> [CLLocationCoordinate2D] {
+        guard pts.count >= 2 else { return pts }
+        var out: [CLLocationCoordinate2D] = [pts[0]]
+        for p in pts.dropFirst() {
+            if let last = out.last, distanceBetween(last, p) < minMeters { continue }
+            out.append(p)
+        }
+        if let firstP = pts.first, let lastP = pts.last, out.count == 1,
+           distanceBetween(firstP, lastP) >= 0.5 {
+            out.append(lastP)
+        }
+        if let lastP = pts.last, let lastOut = out.last, distanceBetween(lastOut, lastP) > 0.5 {
+            out.append(lastP)
+        }
+        return out
+    }
+
+    /// 把平滑后的点逐点拉回参考折线 maxOffset 米内（平滑过头 → 拐角抄近路的兜底）。
+    private func clampToPolyline(_ pts: [CLLocationCoordinate2D],
+                                 reference: [CLLocationCoordinate2D],
+                                 maxOffset: Double) -> [CLLocationCoordinate2D] {
+        guard reference.count >= 2, pts.count >= 2 else { return pts }
+        return pts.map { p in
+            let near = nearestPointOnPolyline(p, reference)
+            return near.distance > maxOffset ? near.coordinate : p
+        }
+    }
+
+    private func nearestPointOnPolyline(_ p: CLLocationCoordinate2D,
+                                        _ poly: [CLLocationCoordinate2D]) -> (coordinate: CLLocationCoordinate2D, distance: Double) {
+        var best = p
+        var bestD = Double.greatestFiniteMagnitude
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(p.latitude * Double.pi / 180)
+        let px = p.longitude * lonScale, py = p.latitude * latScale
+        for i in 1..<poly.count {
+            let a = poly[i - 1], b = poly[i]
+            let ax = a.longitude * lonScale, ay = a.latitude * latScale
+            let bx = b.longitude * lonScale, by = b.latitude * latScale
+            let dx = bx - ax, dy = by - ay
+            let len2 = dx * dx + dy * dy
+            var t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0
+            t = min(max(t, 0), 1)
+            let cx = ax + dx * t, cy = ay + dy * t
+            let d = ((px - cx) * (px - cx) + (py - cy) * (py - cy)).squareRoot()
+            if d < bestD {
+                bestD = d
+                best = CLLocationCoordinate2D(latitude: cy / latScale, longitude: cx / lonScale)
+            }
+        }
+        return (best, bestD)
     }
 
     // MARK: - DriftFix v2.4 几何工具（平滑/简化/弯曲化）
@@ -862,6 +921,14 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     func clearDrawnStrokes() {
         drawnStrokes = []
         try? FileManager.default.removeItem(at: Self.drawnStrokesURL())
+    }
+
+    /// 手画完成后把起/终点对齐到画线的首末点：面板显示、保存的元数据、点序列全部一致，
+    /// 不再出现「起点卡片写着别的地方，实际走的是画线」这种对不上的情况。
+    func setDrawnEndpoints(start: CLLocationCoordinate2D, end: CLLocationCoordinate2D) {
+        userWaypoints = [start, end]
+        waypointModes = [false, false]
+        normalizeModes()
     }
 
     /// 手画线路 → 点序列：把简化后的关键节点写入 userWaypoints，

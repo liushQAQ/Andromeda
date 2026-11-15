@@ -78,17 +78,25 @@ struct CustomMapView: UIViewRepresentable {
                 context.coordinator.selectedIndex = selectedRouteIndex
             }
         } else if let polyline = routePolyline {
-            // Single route
+            // DriftFix v3.1: 必须跟路线内容比对，不能只判「有没有线」。
+            // 旧行为：地图上已有线就不再替换 → 换一条新线路（比如手画的新线）后，
+            // 画面还停在旧线路，模拟点却沿新线路走 —— 看着就是「位置跟我画的不一样、漂移了」。
+            let coords = CoordTransform.polylineCoordinates(polyline)
+            let f = coords.first, l = coords.last
+            let key = "\(coords.count)|\(f?.latitude ?? 0),\(f?.longitude ?? 0)|\(l?.latitude ?? 0),\(l?.longitude ?? 0)"
             let hasExisting = existingOverlays.contains(where: { $0 is MKPolyline })
-            if !hasExisting {
+            if !hasExisting || context.coordinator.currentLineKey != key {
+                uiView.removeOverlays(existingOverlays.filter { $0 is MKPolyline })
                 uiView.addOverlay(polyline, level: .aboveRoads)
                 context.coordinator.currentPolylines = [polyline]
                 context.coordinator.selectedIndex = 0
+                context.coordinator.currentLineKey = key
             }
         } else {
             // No routes - clear
             uiView.removeOverlays(existingOverlays.filter { $0 is MKPolyline })
             context.coordinator.currentPolylines = []
+            context.coordinator.currentLineKey = ""
         }
         
         // Update moving position annotation
@@ -120,6 +128,7 @@ struct CustomMapView: UIViewRepresentable {
         var parent: CustomMapView
         var currentPolylines: [MKPolyline] = []
         var selectedIndex: Int = 0
+        var currentLineKey: String = ""
         var movingAnnotation: MovingAnnotation? = nil
 
         init(_ parent: CustomMapView) {

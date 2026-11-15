@@ -6,6 +6,13 @@ import MapKit
 import UIKit
 import AlertKit
 
+/// 分笔接缝（第 index 笔起点离上一笔终点多少米）
+private struct StrokeGap: Identifiable {
+    let index: Int
+    let meters: Double
+    var id: Int { index }
+}
+
 struct RouteSimSheet: View {
     @ObservedObject var routeSimulator: RouteSimulator
     @Binding var mapRegion: MKCoordinateRegion?
@@ -501,7 +508,7 @@ struct RouteSimSheet: View {
                 Spacer()
             }
             .padding(.horizontal)
-            Text("点「生成路线」进入手画地图：先用「移动地图」定位，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放）。画完可切「修改线路」长按拖动改点、轻点删点，不用整条重画。笔画会自动保存，关掉再进来能接着改。")
+            Text("点「生成路线」进入手画地图：先用「移动地图」定位，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放）。你画成什么样，模拟就走什么样（不再自动简化、不会削拐角）。画完可切「修改线路」长按拖动改点、轻点删点，不用整条重画。笔画会自动保存，关掉再进来能接着改。")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -969,6 +976,22 @@ struct RouteSimSheet: View {
             .pickerStyle(.segmented)
             .padding(.horizontal)
 
+            // v3.1：旧笔画/断笔提醒——路线是「所有笔画按画的顺序连起来」，两笔离太远会拉直线
+            if !drawStrokes.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("已有上次画的 \(drawStrokes.count) 笔（\(allDrawPoints.count) 点），会一起参与这条路线；要重画先点右上角「清空」。")
+                    ForEach(strokeGapWarnings()) { g in
+                        Text("第 \(g.index) 笔的起点离上一笔终点 \(Int(g.meters.rounded())) 米，中间会直线连过去。")
+                            .foregroundColor(.orange)
+                    }
+                }
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.top, 6)
+            }
+
             ZStack {
                 DrawMapView(
                     strokes: drawStrokesBinding,
@@ -1068,6 +1091,36 @@ struct RouteSimSheet: View {
         drawStrokes.flatMap { $0 }
     }
 
+    /// 已有笔画的外接区域（留 60% 余量）：打开手画地图直接定位过去
+    private func drawStrokesRegion() -> MKCoordinateRegion? {
+        let pts = allDrawPoints
+        guard let first = pts.first else { return nil }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for p in pts {
+            minLat = min(minLat, p.latitude); maxLat = max(maxLat, p.latitude)
+            minLon = min(minLon, p.longitude); maxLon = max(maxLon, p.longitude)
+        }
+        let span = MKCoordinateSpan(latitudeDelta: max((maxLat - minLat) * 1.6, 0.004),
+                                    longitudeDelta: max((maxLon - minLon) * 1.6, 0.004))
+        return MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
+                                                                 longitude: (minLon + maxLon) / 2),
+                                  span: span)
+    }
+
+    /// 分笔接缝：第 index 笔的起点离上一笔终点多远（>120m 会拉出一条明显不是画出来的直线）
+    private func strokeGapWarnings() -> [StrokeGap] {
+        guard drawStrokes.count >= 2 else { return [] }
+        var out: [StrokeGap] = []
+        for i in 1..<drawStrokes.count {
+            guard let prevEnd = drawStrokes[i - 1].last, let start = drawStrokes[i].first else { continue }
+            let d = CLLocation(latitude: prevEnd.latitude, longitude: prevEnd.longitude)
+                .distance(from: CLLocation(latitude: start.latitude, longitude: start.longitude))
+            if d > 120 { out.append(StrokeGap(index: i + 1, meters: d)) }
+        }
+        return out
+    }
+
     private func undoLastStroke() {
         guard !drawStrokes.isEmpty else { return }
         drawStrokes.removeLast()
@@ -1077,7 +1130,9 @@ struct RouteSimSheet: View {
     }
 
     private func adoptDrawAsWaypoints() {
-        let src = (drawPreviewOn && (optimizedPoints?.count ?? 0) >= 2) ? optimizedPoints! : allDrawPoints
+        let src = drawPreviewOn
+            ? routeSimulator.optimizeDrawnPath(points: allDrawPoints)
+            : allDrawPoints
         let n = routeSimulator.adoptDrawnAsWaypoints(points: src)
         guard n >= 2 else {
             UIApplication.shared.alert(body: "线路太短，多画一点再转。")
@@ -1105,10 +1160,20 @@ struct RouteSimSheet: View {
     }
 
     private func finishDraw() {
-        let src = (drawPreviewOn && (optimizedPoints?.count ?? 0) >= 2) ? optimizedPoints! : allDrawPoints
+        // v3.1: 每次按当前笔画现算，不再用缓存的预览点——否则改完点/撤销一笔后，
+        // 走的还是改之前那条线（另一个「画的和走的不一样」的来源）
+        let src = drawPreviewOn
+            ? routeSimulator.optimizeDrawnPath(points: allDrawPoints)
+            : allDrawPoints
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
         if routeSimulator.buildFromDrawnPath(points: src, minSpeed: minMps, maxSpeed: maxMps) {
+            // 起终点对齐到画线首末点：卡片显示与实际走的完全一致
+            if let f = src.first, let l = src.last {
+                routeSimulator.setDrawnEndpoints(start: f, end: l)
+                startText = String(format: "%.5f, %.5f", f.latitude, f.longitude)
+                endText = String(format: "%.5f, %.5f", l.latitude, l.longitude)
+            }
             syncDrawStrokes()
             showDrawOverlay = false
             routeReady = true
@@ -1610,6 +1675,9 @@ struct RouteSimSheet: View {
         // DriftFix v2.9: 手画模式 → 打开手画地图（笔画常驻，可接着改；默认直接进画笔模式）
         if routeSimulator.routeMode == .draw {
             drawMode = 1
+            // v3.1: 已有上次的笔画时，地图直接落在笔画范围——不再停在空白地图上，
+            // 免得在别处新画一笔，跟旧笔画拼成一条横跨几百米的怪线路。
+            if let region = drawStrokesRegion() { mapRegion = region }
             showDrawOverlay = true
             return
         }
