@@ -120,7 +120,5 @@ jobs:
             Geranium-2.7.1-freetrack.tipa
             latest.json
             sha256.txt
-            latest.json
-            sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
