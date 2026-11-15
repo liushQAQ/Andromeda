@@ -568,10 +568,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             let legDistance = distanceBetween(leg.from, leg.to)
 
             if legDistance <= threshold || !snapLongSegments {
-                let seg = legDistance > threshold
-                    ? self.curvedSegment(from: leg.from, to: leg.to)
-                    : [leg.from, leg.to]
-                appendSegment(seg)
+                // DriftFix v2.8: 任何一段都走自然化（短段幅度自动收敛到 <1m），不再有一条直尺线
+                appendSegment(self.curvedSegment(from: leg.from, to: leg.to))
                 runLeg(idx + 1)
                 return
             }
@@ -592,7 +590,10 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                         if let f0 = coords.first, let l0 = coords.last {
                             let df = self!.distanceBetween(f0, leg.from)
                             let dt = self!.distanceBetween(l0, leg.to)
-                            if df <= tolerance && dt <= tolerance {
+                            // 距离优先（老总 v2.8）：步行导航绕行超过 18% 一律不采用，
+                            // 改走低幅自然弯——杜绝"两点之间被导航拉得很长"。
+                            let detourRatio = best.distance / max(legDistance, 1.0)
+                            if df <= tolerance && dt <= tolerance && detourRatio <= 1.18 {
                                 let gcj = coords.map { CoordTransform.wgs84ToGcj02($0) }
                                 appendSegment(gcj)
                                 accepted = true
@@ -706,36 +707,59 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return ((px - cx) * (px - cx) + (py - cy) * (py - cy)).squareRoot()
     }
 
-    /// 长段兜底：沿直线走向做正弦绕行（幅度 ≤30m、波长按距离），看起来像自然跑步线路而非直线穿越。
+    /// DriftFix v2.8 长段自然化：每 ≈110m 一个几何节点，沿走向做低幅蛇形摆动。
+    /// 旧版整段只放 2~4 个摆动点、幅度最大 20m——1km 以上看起来就是一条直尺线（假）。
+    /// 现在节点密度跟 GPS 1Hz 的采样量级对齐；横向幅度只 ±0.8~7m 且端点收敛到 0，
+    /// 总里程增幅 <0.1%（老总要求：尽量距离最短，不许为了"自然"绕远）。
     private func curvedSegment(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
         let d = distanceBetween(from, to)
-        guard d > 0 else { return [from, to] }
-        let amp = min(d * 0.04, 20.0)
+        guard d > 12 else { return [from, to] }
+        let nodeSpacing = 110.0
+        let n = max(2, Int((d / nodeSpacing).rounded()))
+        let amp = min(max(d * 0.012, 0.8), 7.0)
         let latScale = 111320.0
         let lonScale = 111320.0 * cos(from.latitude * Double.pi / 180)
         let dx = (to.longitude - from.longitude) * lonScale
         let dy = (to.latitude - from.latitude) * latScale
         let ux = dx / d, uy = dy / d
         let px = -uy, py = ux
-        // 有机绕行（按老总真实轨迹图调形态）：沿走向随机放 2~4 个摆动点，
-        // 垂直偏移 ±(0.35~1)×amp、随机方向，点间由 smoothPolyline 平滑——
-        // 比规则正弦更像真实步行轨迹（自然摆动、可出现小幅回头）。
-        var out: [CLLocationCoordinate2D] = [CLLocationCoordinate2D(latitude: from.latitude, longitude: from.longitude)]
-        let wobbleCount = Int.random(in: 2...4)
-        var lastT = 0.0
-        var lastSide = Bool.random() ? 1.0 : -1.0
-        for _ in 0..<wobbleCount {
-            let t = lastT + Double.random(in: 0.15...0.3)
-            if t >= 0.92 { break }
-            lastT = t
-            lastSide = -lastSide
-            let perp = lastSide * Double.random(in: 0.35...1.0) * amp
-            let x = dx * t + px * perp
-            let y = dy * t + py * perp
+        let phase1 = Double.random(in: 0...(2 * Double.pi))
+        let phase2 = Double.random(in: 0...(2 * Double.pi))
+        var out: [CLLocationCoordinate2D] = [from]
+        for k in 1..<n {
+            let t = Double(k) / Double(n)
+            let envelope = sin(Double.pi * t)          // 两端归零，起终点精确
+            let lateral = amp * envelope * (0.62 * sin(2 * Double.pi * 1.35 * t + phase1)
+                                          + 0.38 * sin(2 * Double.pi * 0.62 * t + phase2))
+            let x = dx * t + px * lateral
+            let y = dy * t + py * lateral
             out.append(CLLocationCoordinate2D(latitude: from.latitude + y / latScale,
                                               longitude: from.longitude + x / lonScale))
         }
-        out.append(CLLocationCoordinate2D(latitude: to.latitude, longitude: to.longitude))
+        out.append(to)
+        return out
+    }
+
+    /// DriftFix v2.8 中间补点：把每段按 spacing 米等分，插入直线插值点（只加点，不改里程）。
+    /// 供 UI「中间补点」按钮调用——长段太长的根治法：先在几何上把段拆细，再由 1Hz 重采样出轨迹。
+    func densifyPoints(_ points: [CLLocationCoordinate2D], spacing: Double) -> [CLLocationCoordinate2D] {
+        guard points.count >= 2, spacing > 20 else { return points }
+        var out: [CLLocationCoordinate2D] = [points[0]]
+        for i in 1..<points.count {
+            let from = points[i - 1]
+            let to = points[i]
+            let d = distanceBetween(from, to)
+            if d > spacing {
+                let pieces = max(2, Int((d / spacing).rounded()))
+                for k in 1..<pieces {
+                    let t = Double(k) / Double(pieces)
+                    out.append(CLLocationCoordinate2D(
+                        latitude: from.latitude + (to.latitude - from.latitude) * t,
+                        longitude: from.longitude + (to.longitude - from.longitude) * t))
+                }
+            }
+            out.append(to)
+        }
         return out
     }
 

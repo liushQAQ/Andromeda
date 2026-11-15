@@ -21,6 +21,7 @@ struct RouteSimSheet: View {
     @AppStorage("andromedaSwapEnds") private var swapEndsOn: Bool = false
     @AppStorage("andromedaLoops") private var loopCount: Int = 1
     @AppStorage("andromedaSnapLong") private var snapLongOn: Bool = true
+    @AppStorage("andromedaFillSpacing") private var fillSpacing: Double = 200
     @State private var isSearchingStart: Bool = false
     @State private var isSearchingEnd: Bool = false
     @State private var startResults: [MKMapItem] = []
@@ -115,6 +116,7 @@ struct RouteSimSheet: View {
                         } else {
                             addWaypointCard
                             waypointsSection
+                            midFillCard
                             comboOptionsSection
                         }
 
@@ -197,6 +199,12 @@ struct RouteSimSheet: View {
                             .padding(.horizontal)
 
                             Text("实际速度在区间内每秒慢速随机变化（不是匀速机器人）；平均配速 \(paceText())")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal)
+                            Text(String(format: "GPS 每秒采一点：平均 %.1f 米/点，约 %.1f 步/点（步幅 1.07m）",
+                                        (speedMinKmh + speedMaxKmh) / 2 / 3.6,
+                                        (speedMinKmh + speedMaxKmh) / 2 / 3.6 / 1.07))
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .padding(.horizontal)
@@ -416,7 +424,7 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             .onChange(of: loopCount) { _ in routeReady = false }
 
-            Toggle("长段自动贴合道路（自由路线生效）", isOn: $snapLongOn)
+            Toggle("长段贴合真实道路（绕远超过 18% 自动放弃）", isOn: $snapLongOn)
                 .font(.subheadline)
                 .padding(.horizontal)
                 .onChange(of: snapLongOn) { _ in routeReady = false }
@@ -796,6 +804,71 @@ struct RouteSimSheet: View {
         .padding(.horizontal)
     }
     
+    // MARK: - DriftFix v2.8 中间补点（「两点之间太长」→ 按米数等分插点，里程不变）
+    private var midFillCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "plus.circle.dashed")
+                    .foregroundColor(.teal)
+                Text("中间补点")
+                    .font(.headline)
+                Spacer()
+                Text("\(Int(fillSpacing)) m")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+
+            HStack {
+                Text("间距")
+                    .font(.caption)
+                    .frame(width: 34)
+                Slider(value: $fillSpacing, in: 50...500, step: 50)
+                    .onChange(of: fillSpacing) { _ in routeReady = false }
+                Text("\(Int(fillSpacing)) m")
+                    .font(.caption)
+                    .frame(width: 52)
+            }
+            .padding(.horizontal)
+
+            Button(action: fillIntermediatePoints) {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                    Text("每段按 \(Int(fillSpacing)) m 插入途经点")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.teal.opacity(0.15)))
+                .foregroundColor(.teal)
+                .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal)
+
+            Text("插入的是直线等分点，总里程不变（距离最短）。补完可在点序列里逐个删除或改成随机。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
+    private func fillIntermediatePoints() {
+        guard routeSimulator.userWaypoints.count >= 2 else { return }
+        let before = routeSimulator.userWaypoints.count
+        let dense = routeSimulator.densifyPoints(routeSimulator.userWaypoints, spacing: fillSpacing)
+        guard dense.count > before else {
+            AlertKitAPI.present(title: "每段都短于 \(Int(fillSpacing)) m，无需补点", icon: .done, style: .iOS17AppleMusic, haptic: .warning)
+            return
+        }
+        routeSimulator.userWaypoints = dense
+        routeSimulator.waypointModes = [Bool](repeating: false, count: dense.count)
+        routeReady = false
+        AlertKitAPI.present(title: "已插入 \(dense.count - before) 个中间点", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+    }
+
     // MARK: - Route Option Card
     private func routeOptionCard(option: RouteOption, index: Int) -> some View {
         let isSelected = routeSimulator.selectedRouteIndex == index
