@@ -1139,8 +1139,9 @@ struct RouteSimSheet: View {
     }
     
     private func calculateRoute() {
-        // DriftFix v2.4: 手画模式 → 打开手画地图（保留已有笔画，可继续画/改）
+        // DriftFix v2.4: 手画模式 → 打开手画地图（保留已有笔画，可继续画/改；默认直接进画笔模式）
         if routeSimulator.routeMode == .draw {
+            drawBrushOn = true
             showDrawOverlay = true
             return
         }
@@ -1383,6 +1384,7 @@ struct DrawMapView: UIViewRepresentable {
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
         uiView.isScrollEnabled = !drawingEnabled   // 画笔=地图固定单指画线；移动=恢复滚动定位
+        uiView.isZoomEnabled = !drawingEnabled     // 画笔模式禁双击/捏合缩放（防误触变成缩放地图）
         uiView.isPitchEnabled = false
         uiView.isRotateEnabled = false
         if let region = moveToRegion {
