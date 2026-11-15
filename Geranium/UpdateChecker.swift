@@ -14,6 +14,8 @@ struct FreeTrackRelease {
     let version: String
     let build: Int
     let tipaURL: String
+    /// 云端可选的备用下载线路（加速镜像），下载不动时换一条
+    let mirrors: [String]
     let changelog: String
 }
 
@@ -154,6 +156,7 @@ final class UpdateCenter: ObservableObject {
         var version = ""
         var build = 0
         var tipaURL = ""
+        var mirrors: [String] = []
         var changelog = ""
 
         if let v = dict["version"] as? String {
@@ -179,6 +182,12 @@ final class UpdateCenter: ObservableObject {
             }
         }
 
+        if let arr = dict["tipa_mirrors"] as? [String] {
+            mirrors = arr.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        } else if let one = dict["tipa_mirror"] as? String, !one.isEmpty {
+            mirrors = [one]
+        }
+
         if let s = dict["changelog"] as? String {
             changelog = s
         } else if let arr = dict["changelog"] as? [String] {
@@ -191,7 +200,7 @@ final class UpdateCenter: ObservableObject {
         if tipaURL.isEmpty {
             tipaURL = "https://github.com/\(repoSlug)/releases/download/v\(version)/Geranium-\(version).tipa"
         }
-        return FreeTrackRelease(version: version, build: build, tipaURL: tipaURL, changelog: changelog)
+        return FreeTrackRelease(version: version, build: build, tipaURL: tipaURL, mirrors: mirrors, changelog: changelog)
     }
 
     // MARK: - 版本比较
@@ -269,15 +278,71 @@ final class UpdateCenter: ObservableObject {
         UIApplication.shared.present(alert: alert)
     }
 
+    /// 候选下载线路：加速镜像优先，GitHub 原始地址兜底。
+    static func candidateURLs(_ release: FreeTrackRelease) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        func add(_ raw: String) {
+            let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !s.isEmpty, !seen.contains(s) else { return }
+            seen.insert(s)
+            out.append(s)
+        }
+        for m in release.mirrors { add(m) }
+        let raw = release.tipaURL
+        if raw.hasPrefix("https://github.com/") || raw.hasPrefix("http://github.com/") {
+            add("https://ghfast.top/" + raw)
+            add("https://gh-proxy.com/" + raw)
+        }
+        add(raw)
+        return out
+    }
+
     /// 优先交给 TrollStore 直接安装；未开启 URL Scheme 时退回浏览器下载页。
     static func install(_ release: FreeTrackRelease) {
-        if let encoded = release.tipaURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+        let urls = candidateURLs(release)
+        guard let first = urls.first else { return }
+        if urls.count == 1 {
+            openInstaller(first)
+            return
+        }
+
+        let sheet = UIAlertController(
+            title: "选择下载线路",
+            message: "默认走加速线路；哪条下载不动就换一条再试。",
+            preferredStyle: .actionSheet
+        )
+        let names = ["线路一（加速）", "线路二（加速）", "线路三（直连）", "线路四"]
+        for (i, u) in urls.enumerated() {
+            let title = i < names.count ? names[i] : "线路\(i + 1)"
+            sheet.addAction(UIAlertAction(title: title, style: .default) { _ in
+                openInstaller(u)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "打开发布页", style: .default) { _ in
+            if let url = URL(string: UpdateCenter.releasesPage) {
+                UIApplication.shared.open(url)
+            }
+        })
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let win = scene.windows.first {
+            sheet.popoverPresentationController?.sourceView = win
+            sheet.popoverPresentationController?.sourceRect = CGRect(
+                x: win.bounds.midX, y: win.bounds.midY, width: 0, height: 0)
+            sheet.popoverPresentationController?.permittedArrowDirections = []
+        }
+        UIApplication.shared.present(alert: sheet)
+    }
+
+    private static func openInstaller(_ urlString: String) {
+        if let encoded = urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
            let troll = URL(string: "apple-magnifier://install?url=\(encoded)"),
            UIApplication.shared.canOpenURL(troll) {
             UIApplication.shared.open(troll)
             return
         }
-        if let url = URL(string: release.tipaURL) {
+        if let url = URL(string: urlString) {
             UIApplication.shared.open(url)
         }
     }
