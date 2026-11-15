@@ -1,4 +1,4 @@
-name: "Andromeda DriftFix TIPA v2.5.9"
+name: "Andromeda DriftFix TIPA v2.5.10"
 
 on:
   push:
@@ -45,34 +45,36 @@ jobs:
           cp -R Geranium.app Payload/Geranium.app
           zip -qry Geranium.tipa Payload
           cd ..
-          cp build/Geranium.tipa "Geranium-2.5.9-smart-route.tipa"
-          shasum -a 256 "Geranium-2.5.9-smart-route.tipa" | tee sha256.txt
-          ls -la "Geranium-2.5.9-smart-route.tipa"
+          cp build/Geranium.tipa "Geranium-2.5.10-midfill.tipa"
+          shasum -a 256 "Geranium-2.5.10-midfill.tipa" | tee sha256.txt
+          ls -la "Geranium-2.5.10-midfill.tipa"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Andromeda-DriftFix-TIPA
           path: |
-            Geranium-2.5.9-smart-route.tipa
+            Geranium-2.5.10-midfill.tipa
             sha256.txt
           if-no-files-found: error
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.9-smart-route
-          name: "Andromeda 2.5.9（手画路线+智能贴路+途径点选点修复+速度区间+汉化）"
+          tag_name: v2.5.10-midfill
+          name: "Andromeda 2.5.10（中间补点 + 长段自然化 + 距离优先）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
-            1. LocSimManager 单点注入后每 0.75s 保活重注入，压住 locationd 融合定位拉扯（单点漂移根治）；路线终点继续保活。
-            2. MKRoute polyline 基准自动判定（中国大陆返回 WGS-84）：显示转 GCJ 贴回真实道路，注入免 GCJ→WGS 双重转换。
-            3. 收藏/App预设 点击模拟不再二次转换（原实现存 WGS 当 GCJ 转 → 固定偏 ~500m）。
-            4. 新增手动坐标输入（GCJ/WGS 可选基准），对齐 Geranium 能力。
-            5. GPX 导入转 GCJ 后再进算路。
+            1. 新增「中间补点」，按 50~500 米自动插入途经点。
+            2. 长段不再是一根直线，每 110 米一个自然弯节点。
+            3. 绕行超过 18% 的导航路线自动放弃，改走短路线。
+            4. 速度区显示每秒采点密度，可核对轨迹是否自然。
+            5. 保存线路点击后恢复起点、终点和途经点。
+            6. 出行方式与速度区间记住上次选择，不再跳回开车。
+            7. 随机路线按顺序就近串联，不再交叉折返。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
-            Geranium-2.5.9-smart-route.tipa
+            Geranium-2.5.10-midfill.tipa
             sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
