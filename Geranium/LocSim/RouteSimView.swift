@@ -120,95 +120,10 @@ struct RouteSimSheet: View {
                             comboOptionsSection
                         }
 
-                        // MARK: - Travel Mode
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("出行方式")
-                                .font(.headline)
-                                .padding(.horizontal)
-                            
-                            HStack(spacing: 12) {
-                                ForEach(TravelMode.allCases, id: \.self) { mode in
-                                    Button(action: {
-                                        // 只在真正切换模式时套默认速度；重复点同一种不会覆盖你自己调好的区间
-                                        if mode != selectedMode {
-                                            selectedMode = mode
-                                            applyModeSpeedDefaults(mode)
-                                        }
-                                        routeReady = false
-                                    }) {
-                                        VStack(spacing: 4) {
-                                            Image(systemName: mode.icon)
-                                                .font(.title2)
-                                            Text(mode.rawValue)
-                                                .font(.caption)
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 10)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(selectedMode == mode ?
-                                                      Color.accentColor.opacity(0.2) :
-                                                      Color(UIColor.secondarySystemBackground))
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(selectedMode == mode ?
-                                                        Color.accentColor : Color.clear, lineWidth: 2)
-                                        )
-                                    }
-                                    .foregroundColor(selectedMode == mode ? .accentColor : .primary)
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
+                        travelModeSection
                         
                         // MARK: - DriftFix v2.2 速度区间（区间内随机游走，杜绝匀速）
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("速度区间")
-                                    .font(.headline)
-                                Spacer()
-                                Text(String(format: "%.1f ~ %.1f km/h", speedMinKmh, speedMaxKmh))
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.horizontal)
-
-                            HStack {
-                                Text("最低")
-                                    .font(.caption)
-                                    .frame(width: 34)
-                                Slider(value: $speedMinKmh, in: 0.5...120, step: 0.5)
-                                    .onChange(of: speedMinKmh) { v in
-                                        if v > speedMaxKmh { speedMaxKmh = v }
-                                        routeReady = false
-                                    }
-                            }
-                            .padding(.horizontal)
-
-                            HStack {
-                                Text("最高")
-                                    .font(.caption)
-                                    .frame(width: 34)
-                                Slider(value: $speedMaxKmh, in: 0.5...120, step: 0.5)
-                                    .onChange(of: speedMaxKmh) { v in
-                                        if v < speedMinKmh { speedMinKmh = v }
-                                        routeReady = false
-                                    }
-                            }
-                            .padding(.horizontal)
-
-                            Text("实际速度在区间内每秒慢速随机变化（不是匀速机器人）；平均配速 \(paceText())")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal)
-                            Text(String(format: "GPS 每秒采一点：平均 %.1f 米/点，约 %.1f 步/点（步幅 1.07m）",
-                                        (speedMinKmh + speedMaxKmh) / 2 / 3.6,
-                                        (speedMinKmh + speedMaxKmh) / 2 / 3.6 / 1.07))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal)
-                        }
+                        speedRangeSection
                         
                         // MARK: - Calculate Button
                                 Button(action: calculateRoute) {
@@ -385,6 +300,101 @@ struct RouteSimSheet: View {
         if showDrawOverlay {
             drawOverlay
         }
+        }
+    }
+
+    // MARK: - 出行方式（拆子视图：body 表达式过大触发类型检查超时）
+    private var travelModeSection: some View {
+        // MARK: - Travel Mode
+        VStack(alignment: .leading, spacing: 8) {
+            Text("出行方式")
+                .font(.headline)
+                .padding(.horizontal)
+            
+            HStack(spacing: 12) {
+                ForEach(TravelMode.allCases, id: \.self) { mode in
+                    Button(action: {
+                        // 只在真正切换模式时套默认速度；重复点同一种不会覆盖你自己调好的区间
+                        if mode != selectedMode {
+                            selectedMode = mode
+                            applyModeSpeedDefaults(mode)
+                        }
+                        routeReady = false
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: mode.icon)
+                                .font(.title2)
+                            Text(mode.rawValue)
+                                .font(.caption)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(selectedMode == mode ?
+                                      Color.accentColor.opacity(0.2) :
+                                      Color(UIColor.secondarySystemBackground))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(selectedMode == mode ?
+                                        Color.accentColor : Color.clear, lineWidth: 2)
+                        )
+                    }
+                    .foregroundColor(selectedMode == mode ? .accentColor : .primary)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    // MARK: - 速度区间（拆子视图：同上）
+    private var speedRangeSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("速度区间")
+                    .font(.headline)
+                Spacer()
+                Text(String(format: "%.1f ~ %.1f km/h", speedMinKmh, speedMaxKmh))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+
+            HStack {
+                Text("最低")
+                    .font(.caption)
+                    .frame(width: 34)
+                Slider(value: $speedMinKmh, in: 0.5...120, step: 0.5)
+                    .onChange(of: speedMinKmh) { v in
+                        if v > speedMaxKmh { speedMaxKmh = v }
+                        routeReady = false
+                    }
+            }
+            .padding(.horizontal)
+
+            HStack {
+                Text("最高")
+                    .font(.caption)
+                    .frame(width: 34)
+                Slider(value: $speedMaxKmh, in: 0.5...120, step: 0.5)
+                    .onChange(of: speedMaxKmh) { v in
+                        if v < speedMinKmh { speedMinKmh = v }
+                        routeReady = false
+                    }
+            }
+            .padding(.horizontal)
+
+            Text("实际速度在区间内每秒慢速随机变化（不是匀速机器人）；平均配速 \(paceText())")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+            Text(String(format: "GPS 每秒采一点：平均 %.1f 米/点，约 %.1f 步/点（步幅 1.07m）",
+                        (speedMinKmh + speedMaxKmh) / 2 / 3.6,
+                        (speedMinKmh + speedMaxKmh) / 2 / 3.6 / 1.07))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
         }
     }
 
