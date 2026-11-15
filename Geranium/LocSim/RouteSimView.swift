@@ -779,6 +779,11 @@ struct RouteSimSheet: View {
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
 
+            Toggle("尽量走地图上的道路", isOn: $snapLongOn)
+                .font(.subheadline)
+                .padding(.horizontal)
+                .onChange(of: snapLongOn) { _ in routeReady = false }
+
             if routeSimulator.areaRect == nil {
                 Text("⚠️ 还没框选区域：点上面「框选区域」，在地图上按住从一个角拖到对角。")
                     .font(.caption2)
