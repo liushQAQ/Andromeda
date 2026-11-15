@@ -214,17 +214,27 @@ struct SettingsView: View {
                     HStack {
                         Text("应用")
                         Spacer()
-                        Text("Andromeda v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        Text("自由轨迹 v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
                             .foregroundColor(.secondary)
                     }
                     HStack {
                         Text("开发者")
                         Spacer()
-                        Text("son3ra1n")
+                        Text("liushQAQ")
                             .foregroundColor(.indigo)
                     }
                     Button(action: {
-                        if let url = URL(string: "https://github.com/son3ra1n/Andromeda") {
+                        UpdateCenter.shared.check(manual: true)
+                    }) {
+                        HStack {
+                            Text("检查更新")
+                            Spacer()
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundColor(.indigo)
+                        }
+                    }
+                    Button(action: {
+                        if let url = URL(string: "https://github.com/liushQAQ/Andromeda") {
                             UIApplication.shared.open(url)
                         }
                     }) {
@@ -238,7 +248,7 @@ struct SettingsView: View {
                 }
                 
                 // MARK: - Acknowledgments
-                Section(header: Label("致谢", systemImage: "heart.fill"), footer: Text("Andromeda 基于 c22dev 的 Geranium 项目构建，遵循 GPL-3.0 协议。")) {
+                Section(header: Label("致谢", systemImage: "heart.fill"), footer: Text("自由轨迹 基于 c22dev 的 Geranium 项目与 son3ra1n 的 Andromeda 构建，遵循 GPL-3.0 协议。")) {
                     Button(action: {
                         UIApplication.shared.open(URL(string: "https://github.com/c22dev/Geranium")!)
                     }) {
@@ -247,6 +257,22 @@ struct SettingsView: View {
                                 Text("Geranium（c22dev）")
                                     .foregroundColor(.primary)
                                 Text("原项目与核心架构")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right.square")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Button(action: {
+                        UIApplication.shared.open(URL(string: "https://github.com/son3ra1n/Andromeda")!)
+                    }) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Andromeda（son3ra1n）")
+                                    .foregroundColor(.primary)
+                                Text("原项目与路线模拟能力")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

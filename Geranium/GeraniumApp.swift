@@ -14,9 +14,12 @@ struct GeraniumApp: App {
             ContentView()
                 .onAppear {
                     if checkSandbox(), !appSettings.tsBypass, !appSettings.isFirstRun {
-                        UIApplication.shared.alert(title:"Andromeda wasn't installed with TrollStore", body:"Unable to create test file. The app cannot work without the correct entitlements. Please use TrollStore to install it.", withButton:true)
+                        UIApplication.shared.alert(title:"自由轨迹 未通过 TrollStore 安装", body:"无法创建测试文件。缺少正确 entitlements 时应用无法工作，请使用 TrollStore 安装。", withButton:true)
                     }
                     _ = RootHelper.loadMCM()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                        UpdateCenter.shared.autoCheckIfNeeded()
+                    }
                 }
                 .sheet(isPresented: $appSettings.isFirstRun) {
                     if #available(iOS 16.0, *) {

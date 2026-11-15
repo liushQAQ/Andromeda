@@ -1,4 +1,4 @@
-name: "Andromeda DriftFix TIPA v2.5.10"
+name: "自由轨迹 TIPA v2.5.11"
 
 on:
   push:
@@ -45,36 +45,64 @@ jobs:
           cp -R Geranium.app Payload/Geranium.app
           zip -qry Geranium.tipa Payload
           cd ..
-          cp build/Geranium.tipa "Geranium-2.5.10-midfill.tipa"
-          shasum -a 256 "Geranium-2.5.10-midfill.tipa" | tee sha256.txt
-          ls -la "Geranium-2.5.10-midfill.tipa"
+          cp build/Geranium.tipa "Geranium-2.5.11-freetrack.tipa"
+          shasum -a 256 "Geranium-2.5.11-freetrack.tipa" | tee sha256.txt
+          ls -la "Geranium-2.5.11-freetrack.tipa"
+
+      - name: Generate latest.json（云端更新检测元数据）
+        run: |
+          python3 - <<'PY'
+          import io, json
+          changelog = "\n".join([
+              "1. 应用改名为「自由轨迹」，作者改为 liushQAQ。",
+              "2. 首页新增检查更新，一键比对云端最新安装包。",
+              "3. 发现新版本可直接跳转 TrollStore 安装。",
+              "4. 启动后自动静默检查，6 小时内不重复打扰。",
+              "5. 中间补点支持按 50~500 米自动插入途经点。",
+              "6. 长段自动生成自然弯，路线不再是一根直线。",
+              "7. 绕行超过 18% 的导航路线自动放弃，改用短路。",
+          ])
+          data = {
+              "version": "2.5.11-freetrack",
+              "build": 12,
+              "title": "自由轨迹 v2.5.11（云端更新 + 改名）",
+              "changelog": changelog,
+              "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.5.11-freetrack/Geranium-2.5.11-freetrack.tipa",
+              "min_ios": "15.0",
+          }
+          with io.open("latest.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          print(io.open("latest.json", encoding="utf-8").read())
+          PY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Andromeda-DriftFix-TIPA
+          name: FreeTrack-TIPA
           path: |
-            Geranium-2.5.10-midfill.tipa
+            Geranium-2.5.11-freetrack.tipa
+            latest.json
             sha256.txt
           if-no-files-found: error
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.10-midfill
-          name: "Andromeda 2.5.10（中间补点 + 长段自然化 + 距离优先）"
+          tag_name: v2.5.11-freetrack
+          name: "自由轨迹 2.5.11（云端在线更新 + 改名）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
-            1. 新增「中间补点」，按 50~500 米自动插入途经点。
-            2. 长段不再是一根直线，每 110 米一个自然弯节点。
-            3. 绕行超过 18% 的导航路线自动放弃，改走短路线。
-            4. 速度区显示每秒采点密度，可核对轨迹是否自然。
-            5. 保存线路点击后恢复起点、终点和途经点。
-            6. 出行方式与速度区间记住上次选择，不再跳回开车。
-            7. 随机路线按顺序就近串联，不再交叉折返。
+            1. 应用改名为「自由轨迹」，作者改为 liushQAQ。
+            2. 首页新增检查更新，一键比对云端最新安装包。
+            3. 发现新版本可直接跳转 TrollStore 安装。
+            4. 启动后自动静默检查，6 小时内不重复打扰。
+            5. 中间补点支持按 50~500 米自动插入途经点。
+            6. 长段自动生成自然弯，路线不再是一根直线。
+            7. 绕行超过 18% 的导航路线自动放弃，改用短路。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
-            Geranium-2.5.10-midfill.tipa
+            Geranium-2.5.11-freetrack.tipa
+            latest.json
             sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

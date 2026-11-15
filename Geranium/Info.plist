@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Andromeda</string>
+	<string>自由轨迹</string>
 	<key>CFBundleExecutable</key>
 	<string>Geranium</string>
 	<key>CFBundleIdentifier</key>
@@ -13,13 +13,17 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Andromeda</string>
+	<string>自由轨迹</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.5.10-midfill</string>
+	<string>2.5.11-freetrack</string>
 	<key>CFBundleVersion</key>
-	<string>11</string>
+	<string>12</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>apple-magnifier</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -35,11 +39,11 @@
 		<string>processing</string>
 	</array>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Andromeda needs your location for simulation.</string>
+	<string>自由轨迹 needs your location for simulation.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Andromeda needs your location for simulation.</string>
+	<string>自由轨迹 needs your location for simulation.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Andromeda needs your location for simulation.</string>
+	<string>自由轨迹 needs your location for simulation.</string>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>

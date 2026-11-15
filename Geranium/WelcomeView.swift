@@ -16,7 +16,7 @@ struct WelcomeView: View {
     var body: some View {
         List {
             Section(header: Text("初始设置")) {
-                Text("欢迎使用 Andromeda——面向 TrollStore 的 iOS 工具箱：摇杆与路线定位模拟、守护进程管理、精细化存储清理等。由 son3ra1n 开发。")
+                Text("欢迎使用 自由轨迹——面向 TrollStore 的 iOS 工具箱：摇杆与路线定位模拟、守护进程管理、精细化存储清理等。由 liushQAQ 维护，基于 Geranium 与 Andromeda。")
             }
             if getDeviceCode() == "iPhone8,4" {
                 Section(header: Text("你好！iPhone SE 一代用户")) {

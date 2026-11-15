@@ -30,14 +30,14 @@ struct HomeView: View {
                                 .shadow(color: .indigo.opacity(0.5), radius: 15, x: 0, y: 10)
                             
                             VStack(spacing: 4) {
-                                Text("ANDROMEDA")
+                                Text("自由轨迹")
                                     .font(.system(size: 28, weight: .black, design: .rounded))
                                     .tracking(2)
                                     .foregroundStyle(
                                         LinearGradient(colors: [.indigo, .purple], startPoint: .leading, endPoint: .trailing)
                                     )
                                 
-                                Text("PRO EDITION BY SON3RA1N")
+                                Text("BY LIUSHQAQ")
                                     .font(.system(size: 10, weight: .bold))
                                     .foregroundColor(.secondary)
                                     .tracking(1)
@@ -48,9 +48,14 @@ struct HomeView: View {
                         // MARK: - Feature Stats Card
                         HStack(spacing: 15) {
                             statItem(title: "状态", value: "Verified", icon: "checkmark.shield.fill", color: .green)
-                            statItem(title: "版本", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")-Pro", icon: "cpu", color: .indigo)
+                            statItem(title: "版本", value: "v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")", icon: "cpu", color: .indigo)
                         }
                         .padding(.horizontal)
+                        
+                        // MARK: - Cloud Update
+                        UpdateCard()
+                            .padding(.horizontal)
+                        
                         
                         // MARK: - Main Actions
                         VStack(spacing: 12) {
@@ -61,7 +66,8 @@ struct HomeView: View {
                                 .padding(.leading, 10)
                             
                             VStack(spacing: 1) {
-                                creditRow(name: "son3ra1n", role: "Main Developer", image: "https://github.com/son3ra1n.png")
+                                creditRow(name: "liushQAQ", role: "作者 / 维护", image: "https://github.com/liushQAQ.png")
+                                creditRow(name: "son3ra1n", role: "原 Andromeda 作者", image: "https://github.com/son3ra1n.png")
                             }
                             .glassCard()
                         }

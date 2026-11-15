@@ -19,6 +19,7 @@
 		7930B46D2B4B2AD800A5B0CB /* MobileCoreServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7930B4592B4B267F00A5B0CB /* MobileCoreServices.framework */; };
 		7930B46E2B4B2ADD00A5B0CB /* CoreServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 790301BC2B3774F90044E30A /* CoreServices.framework */; };
 		793E3D6F2B37AA1300A72671 /* BetaChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 793E3D6E2B37AA1300A72671 /* BetaChecker.swift */; };
+		F5A100012E5F000100A1B2C3 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A100022E5F000100A1B2C3 /* UpdateChecker.swift */; };
 		7956C4542B4DF122004D3A1A /* Beta.png in Resources */ = {isa = PBXBuildFile; fileRef = 7956C4532B4DF122004D3A1A /* Beta.png */; };
 		796072E02B4F4FAE00737B5D /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 796072DF2B4F4FAE00737B5D /* UniformTypeIdentifiers.framework */; };
 		796072E32B4F4FAE00737B5D /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 796072E22B4F4FAE00737B5D /* Media.xcassets */; };
@@ -131,6 +132,7 @@
 		792845592B2C80A40021E1FD /* DaemonDisabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonDisabler.swift; sourceTree = "<group>"; };
 		7930B4592B4B267F00A5B0CB /* MobileCoreServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MobileCoreServices.framework; path = System/Library/Frameworks/MobileCoreServices.framework; sourceTree = SDKROOT; };
 		793E3D6E2B37AA1300A72671 /* BetaChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaChecker.swift; sourceTree = "<group>"; };
+		F5A100022E5F000100A1B2C3 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
 		7956C4532B4DF122004D3A1A /* Beta.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Beta.png; sourceTree = "<group>"; };
 		796072DE2B4F4FAE00737B5D /* Bookmark Location in Geranium.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Bookmark Location in Geranium.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		796072DF2B4F4FAE00737B5D /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
@@ -322,6 +324,7 @@
 				FAA457042B2660AC00FC7287 /* Geranium-Bringing-Header.h */,
 				FAA457052B2661AD00FC7287 /* Libs */,
 				793E3D6E2B37AA1300A72671 /* BetaChecker.swift */,
+				F5A100022E5F000100A1B2C3 /* UpdateChecker.swift */,
 				FAA456D62B265FEA00FC7287 /* ContentView.swift */,
 				FAA457262B26667E00FC7287 /* HomeView.swift */,
 				790301C42B3794480044E30A /* SettingsView.swift */,
@@ -601,6 +604,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				793E3D6F2B37AA1300A72671 /* BetaChecker.swift in Sources */,
+				F5A100012E5F000100A1B2C3 /* UpdateChecker.swift in Sources */,
 				7989FD082B34894400FBAB8D /* BookMarkSlider.swift in Sources */,
 				7916D9E62B34FC06008E88F2 /* Paths.swift in Sources */,
 				79FDECC92B878F4700B2DFB0 /* NotifHelp.swift in Sources */,
