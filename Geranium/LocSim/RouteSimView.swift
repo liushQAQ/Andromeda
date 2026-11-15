@@ -1410,13 +1410,13 @@ struct DrawMapView: UIViewRepresentable {
             if !parent.drawingEnabled { return }   // 移动模式：交给地图自身手势
             switch g.state {
             case .began:
-                parent.strokes.append([])
+                if parent.strokes.last?.isEmpty != true { parent.strokes.append([]) }
             case .changed:
-                guard !(parent.strokes.last?.isEmpty ?? true) || parent.strokes.isEmpty else { break }
+                // DriftFix v2.6: 修复空笔画 guard 死锁——第一个点永远写不进去导致无法绘制
+                if parent.strokes.isEmpty || parent.strokes.last?.isEmpty == true { parent.strokes.append([]) }
                 let p = g.location(in: mv)
                 let c = mv.convert(p, toCoordinateFrom: mv)
-                if parent.strokes.isEmpty { parent.strokes.append([]) }
-                if let last = parent.strokes.last, let lastC = last.last {
+                if let lastC = parent.strokes.last?.last {
                     let d = CLLocation(latitude: lastC.latitude, longitude: lastC.longitude)
                         .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude))
                     if d < 8 { break }   // 8m 采样节流

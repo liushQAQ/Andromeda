@@ -290,11 +290,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 起点卡：设 userWaypoints[0]（保留已有途经点）。
     func setStart(_ coord: CLLocationCoordinate2D) {
+        normalizeModes()
         if userWaypoints.isEmpty { userWaypoints = [coord] } else { userWaypoints[0] = coord }
     }
 
     /// 终点卡：设最后一个点（保留已有途经点）。
     func setEnd(_ coord: CLLocationCoordinate2D) {
+        normalizeModes()
         if userWaypoints.count < 2 {
             userWaypoints.append(coord)
             waypointModes.append(false)
@@ -305,19 +307,29 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 地图选点添加：插入在终点之前（终点保持收尾）。
     func addPickedWaypoint(_ coord: CLLocationCoordinate2D) {
+        normalizeModes()
         if userWaypoints.count < 2 {
             userWaypoints.append(coord)
             waypointModes.append(false)
         } else {
             userWaypoints.insert(coord, at: userWaypoints.count - 1)
-            waypointModes.insert(false, at: userWaypoints.count - 1)
+            waypointModes.insert(false, at: max(0, userWaypoints.count - 1))
         }
     }
 
     func removeWaypoint(at index: Int) {
+        normalizeModes()
         guard userWaypoints.indices.contains(index) else { return }
         userWaypoints.remove(at: index)
         if waypointModes.indices.contains(index) { waypointModes.remove(at: index) }
+    }
+
+    /// DriftFix v2.6: modes 数组与点列长度对齐（防越界闪退——确认添加崩溃的根因）
+    private func normalizeModes() {
+        while waypointModes.count < userWaypoints.count { waypointModes.append(false) }
+        if waypointModes.count > userWaypoints.count {
+            waypointModes = Array(waypointModes.prefix(userWaypoints.count))
+        }
     }
 
     /// 途经点行：固定顺序 ⇄ 随机 切换
@@ -334,6 +346,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // ④ 起终点随机互换 = 奇数圈反向（往返绕圈）
     // ⑤ 绕圈次数：整序列重复，每圈重新组合，接缝自动去重
     func generateVisitSequence(skipProbability: Double, swapEnds: Bool, loops: Int) -> [Int] {
+        normalizeModes()
         let n = userWaypoints.count
         guard n >= 2 else { return [0] }
         let middle = Array(1...(n - 2))
