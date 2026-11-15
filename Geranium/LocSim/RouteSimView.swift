@@ -13,12 +13,14 @@ struct RouteSimSheet: View {
     
     @State private var startText: String = ""
     @State private var endText: String = ""
-    @State private var selectedMode: TravelMode = .driving
-    @State private var speedMinKmh: Double = 30.0
-    @State private var speedMaxKmh: Double = 60.0
-    @State private var skipProbPct: Double = 0
-    @State private var swapEndsOn: Bool = false
-    @State private var loopCount: Int = 1
+    // DriftFix v2.7: 出行方式/速度区间/组合选项 全部记住上次选择（不再每次回到驾车 30~60）
+    @AppStorage("andromedaTravelMode") private var travelModeRaw: String = TravelMode.walking.rawValue
+    @AppStorage("andromedaSpeedMin") private var speedMinKmh: Double = 8.0
+    @AppStorage("andromedaSpeedMax") private var speedMaxKmh: Double = 10.0
+    @AppStorage("andromedaSkipPct") private var skipProbPct: Double = 0
+    @AppStorage("andromedaSwapEnds") private var swapEndsOn: Bool = false
+    @AppStorage("andromedaLoops") private var loopCount: Int = 1
+    @AppStorage("andromedaSnapLong") private var snapLongOn: Bool = true
     @State private var isSearchingStart: Bool = false
     @State private var isSearchingEnd: Bool = false
     @State private var startResults: [MKMapItem] = []
@@ -38,7 +40,6 @@ struct RouteSimSheet: View {
     @State private var drawPreviewOn: Bool = false
     @State private var drawBrushOn: Bool = false
     @State private var drawMoveToRegion: MKCoordinateRegion? = nil
-    @State private var snapLongOn: Bool = true
     @State private var showGPXPicker: Bool = false
     @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
     @State private var savedRoutes: [RouteSimulator.SavedRouteInfo] = []
@@ -51,6 +52,12 @@ struct RouteSimSheet: View {
 
     private var savedSort: RouteSimulator.SavedSort {
         RouteSimulator.SavedSort(rawValue: savedSortRaw) ?? .dateDesc
+    }
+
+    /// 出行方式走 AppStorage：选过就记住，重开面板不会跳回「驾车」
+    private var selectedMode: TravelMode {
+        get { TravelMode(rawValue: travelModeRaw) ?? .walking }
+        set { travelModeRaw = newValue.rawValue }
     }
 
     private func refreshSavedRoutes() {
@@ -120,8 +127,11 @@ struct RouteSimSheet: View {
                             HStack(spacing: 12) {
                                 ForEach(TravelMode.allCases, id: \.self) { mode in
                                     Button(action: {
-                                        selectedMode = mode
-                                        applyModeSpeedDefaults(mode)
+                                        // 只在真正切换模式时套默认速度；重复点同一种不会覆盖你自己调好的区间
+                                        if mode != selectedMode {
+                                            selectedMode = mode
+                                            applyModeSpeedDefaults(mode)
+                                        }
                                         routeReady = false
                                     }) {
                                         VStack(spacing: 4) {
@@ -453,6 +463,7 @@ struct RouteSimSheet: View {
                 ForEach(RouteSimulator.RouteMode.allCases) { m in
                     Button(action: {
                         routeSimulator.routeMode = m
+                        UserDefaults.standard.set(m.rawValue, forKey: "andromedaRouteMode")
                         routeReady = false
                     }) {
                         VStack(spacing: 4) {
@@ -1319,7 +1330,20 @@ struct RouteSimSheet: View {
             textFieldPlaceHolder: "Example: Morning Run"
         ) { text, _ in
             guard let name = text, !name.isEmpty else { return }
-            if routeSimulator.saveCurrentRoute(named: name) {
+            // DriftFix v2.7: 连同起终点/途经点/出行方式/速度区间一起存，载入后能完整还原
+            let meta = RouteSimulator.SavedRouteMeta(
+                mode: routeSimulator.routeMode.rawValue,
+                travelMode: selectedMode.rawValue,
+                speedMinKmh: speedMinKmh,
+                speedMaxKmh: speedMaxKmh,
+                skipPct: skipProbPct,
+                swapEnds: swapEndsOn,
+                loops: loopCount,
+                snapLong: snapLongOn,
+                waypoints: routeSimulator.userWaypoints.map { [$0.latitude, $0.longitude] },
+                waypointModes: routeSimulator.waypointModes
+            )
+            if routeSimulator.saveCurrentRoute(named: name, meta: meta) {
                 savedRoutes = RouteSimulator.savedRouteInfos(sort: savedSort)
                 AlertKitAPI.present(title: "已保存", icon: .done, style: .iOS17AppleMusic, haptic: .success)
             } else {
@@ -1329,16 +1353,33 @@ struct RouteSimSheet: View {
     }
 
     private func loadSavedRoute(_ info: RouteSimulator.SavedRouteInfo) {
-        if routeSimulator.loadSavedRoute(at: info.url) {
-            routeReady = true
-            if let poly = routeSimulator.routePolyline {
-                let rect = poly.boundingMapRect
-                mapRegion = MKCoordinateRegion(rect.insetBy(dx: -rect.size.width * 0.2, dy: -rect.size.height * 0.2))
-            }
-            AlertKitAPI.present(title: "已载入", icon: .done, style: .iOS17AppleMusic, haptic: .success)
-        } else {
+        let res = routeSimulator.loadSavedRoute(at: info.url)
+        guard res.ok else {
             UIApplication.shared.alert(body: "线路文件载入失败。")
+            return
         }
+        // 元数据回填：出行方式/速度区间/组合选项/起终点文字——和保存时一模一样
+        if let meta = res.meta {
+            if let m = TravelMode(rawValue: meta.travelMode) { travelModeRaw = m.rawValue }
+            speedMinKmh = meta.speedMinKmh
+            speedMaxKmh = meta.speedMaxKmh
+            skipProbPct = meta.skipPct
+            swapEndsOn = meta.swapEnds
+            loopCount = meta.loops
+            snapLongOn = meta.snapLong
+        }
+        if let first = routeSimulator.userWaypoints.first {
+            startText = String(format: "%.5f, %.5f", first.latitude, first.longitude)
+        }
+        if let last = routeSimulator.userWaypoints.last {
+            endText = String(format: "%.5f, %.5f", last.latitude, last.longitude)
+        }
+        routeReady = true
+        if let poly = routeSimulator.routePolyline {
+            let rect = poly.boundingMapRect
+            mapRegion = MKCoordinateRegion(rect.insetBy(dx: -rect.size.width * 0.2, dy: -rect.size.height * 0.2))
+        }
+        AlertKitAPI.present(title: "已载入", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
     
     private func startRoute() {

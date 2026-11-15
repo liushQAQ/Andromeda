@@ -129,6 +129,10 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     override init() {
         super.init()
+        if let raw = UserDefaults.standard.string(forKey: "andromedaRouteMode"),
+           let saved = RouteMode(rawValue: raw) {
+            routeMode = saved
+        }
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
@@ -339,43 +343,47 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         waypointModes[index].toggle()
     }
 
-    // MARK: - DriftFix v2.3 访问序列生成（多自由度组合）
-    // ① 每个途经点独立标签：固定顺序（保持相对次序、必到）/ 随机（洗牌+可跳过）
-    // ② 随机点每次 Calculate/每圈重新洗牌，随机插入固定点序列的空隙
-    // ③ 随机跳过概率只作用于随机点（固定点必到）
-    // ④ 起终点随机互换 = 奇数圈反向（往返绕圈）
-    // ⑤ 绕圈次数：整序列重复，每圈重新组合，接缝自动去重
+    // MARK: - DriftFix v2.7 访问序列生成（就近排序，杜绝交叉乱穿）
+    // 旧版把随机点「随机位置 insert」——线路来回交叉，看起来像 GPS 漂移。
+    // 新版规则：
+    // ① 固定点保持用户给定次序（必到）；
+    // ② 随机点先按几何位置归到「相邻锚点之间的空档」，再沿空档做就近串联，
+    //    只保留「前两个最近里随机取一个」的轻微随机（有变化但不打结）；
+    // ③ 多生成几组候选，取「线段交叉最少 → 总里程最短」的一组；
+    // ④ 随机跳过只作用于随机点；起终点互换 = 奇数圈反向（往返）；绕圈次数 = 整序列重复。
     func generateVisitSequence(skipProbability: Double, swapEnds: Bool, loops: Int) -> [Int] {
         normalizeModes()
         let n = userWaypoints.count
         guard n >= 2 else { return [0] }
-        let middle = Array(1...(n - 2))
         let skip = min(max(skipProbability, 0), 1)
         let modes = waypointModes
-        let modeAt: (Int) -> Bool = { $0 < modes.count && modes[$0] }
 
         var out: [Int] = [0]
         let loopCount = max(1, loops)
         for l in 0..<loopCount {
-            var seq: [Int] = []
+            var fixed: [Int] = []
             var wilds: [Int] = []
-            for m in middle {
-                if modeAt(m) { wilds.append(m) } else { seq.append(m) }   // 固定点按序 / 随机点
-            }
-            if skip > 0 {
-                var kept: [Int] = []
-                for w in wilds {
-                    if Double.random(in: 0.0...1.0) >= skip { kept.append(w) }
+            if n > 2 {
+                for m in 1...(n - 2) {
+                    let isWild = m < modes.count && modes[m]
+                    if isWild {
+                        if skip > 0 && Double.random(in: 0.0...1.0) < skip { continue }
+                        wilds.append(m)
+                    } else {
+                        fixed.append(m)
+                    }
                 }
-                wilds = kept
             }
-            wilds.shuffle()
-            for w in wilds {
-                seq.insert(w, at: Int.random(in: 0...seq.count))
-            }
-            var leg = [0] + seq + [n - 1]
+            var leg = smoothOrder(fixed: fixed, wilds: wilds, n: n)
             if swapEnds && l % 2 == 1 {
-                leg = [n - 1] + leg.dropFirst().dropLast().reversed() + [0]
+                var rev: [Int] = [n - 1]
+                var i = leg.count - 2
+                while i >= 1 {
+                    rev.append(leg[i])
+                    i -= 1
+                }
+                rev.append(0)
+                leg = rev
             }
             for i in leg {
                 if let last = out.last, last == i { continue }  // 圈间接缝去重
@@ -384,6 +392,118 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         visitSequenceText = out.map { $0 == 0 ? "起" : ($0 == n - 1 ? "终" : "#\($0)") }.joined(separator: " → ")
         return out
+    }
+
+    /// 锚点（起 → 固定点… → 终）为骨架，随机点插进各自最贴合的相邻锚点空档里就地串联。
+    /// 候选里挑交叉最少、里程最短的一条。
+    private func smoothOrder(fixed: [Int], wilds: [Int], n: Int) -> [Int] {
+        var anchors: [Int] = [0]
+        anchors.append(contentsOf: fixed)
+        anchors.append(n - 1)
+        if wilds.isEmpty { return anchors }
+
+        var best: [Int] = anchors
+        var bestCross = Int.max
+        var bestLen = Double.greatestFiniteMagnitude
+        for _ in 0..<12 {
+            let cand = anchorOrder(anchors: anchors, wilds: wilds, jitter: true)
+            let cross = crossingCount(cand)
+            let len = pathLength(cand)
+            if cross < bestCross || (cross == bestCross && len < bestLen) {
+                best = cand
+                bestCross = cross
+                bestLen = len
+            }
+            if bestCross == 0 { break }
+        }
+        return best
+    }
+
+    private func anchorOrder(anchors: [Int], wilds: [Int], jitter: Bool) -> [Int] {
+        var buckets = [[Int]](repeating: [], count: max(anchors.count - 1, 1))
+        for w in wilds {
+            var bestGap = 0
+            var bestD = Double.greatestFiniteMagnitude
+            if anchors.count >= 2 {
+                for g in 0..<(anchors.count - 1) {
+                    let d = pointToSegmentDistance(userWaypoints[w], userWaypoints[anchors[g]], userWaypoints[anchors[g + 1]])
+                    if d < bestD {
+                        bestD = d
+                        bestGap = g
+                    }
+                }
+            }
+            buckets[bestGap].append(w)
+        }
+
+        var out: [Int] = [anchors[0]]
+        for g in 0..<max(anchors.count - 1, 1) {
+            var remain = buckets[g]
+            var cur = anchors[g]
+            while !remain.isEmpty {
+                let ordered = remain.sorted {
+                    distanceBetween(userWaypoints[cur], userWaypoints[$0]) < distanceBetween(userWaypoints[cur], userWaypoints[$1])
+                }
+                var pick = 0
+                if jitter && ordered.count > 1 && Bool.random() { pick = 1 }
+                let next = ordered[pick]
+                out.append(next)
+                remain.removeAll { $0 == next }
+                cur = next
+            }
+            if g + 1 < anchors.count { out.append(anchors[g + 1]) }
+        }
+        return out
+    }
+
+    private func pathLength(_ order: [Int]) -> Double {
+        guard order.count >= 2 else { return 0 }
+        var total = 0.0
+        for i in 1..<order.count {
+            total += distanceBetween(userWaypoints[order[i - 1]], userWaypoints[order[i]])
+        }
+        return total
+    }
+
+    private func crossingCount(_ order: [Int]) -> Int {
+        guard order.count >= 4 else { return 0 }
+        let segs = order.count - 1
+        var count = 0
+        if segs >= 2 {
+            for i in 0..<(segs - 1) {
+                for j in (i + 2)..<segs {
+                    if segmentsIntersect(userWaypoints[order[i]], userWaypoints[order[i + 1]],
+                                         userWaypoints[order[j]], userWaypoints[order[j + 1]]) {
+                        count += 1
+                    }
+                }
+            }
+        }
+        return count
+    }
+
+    private func metersXY(_ c: CLLocationCoordinate2D, origin: CLLocationCoordinate2D) -> (x: Double, y: Double) {
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(origin.latitude * Double.pi / 180)
+        return ((c.longitude - origin.longitude) * lonScale, (c.latitude - origin.latitude) * latScale)
+    }
+
+    private func segmentsIntersect(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D,
+                                   _ c: CLLocationCoordinate2D, _ d: CLLocationCoordinate2D) -> Bool {
+        let pa = metersXY(a, origin: a)
+        let pb = metersXY(b, origin: a)
+        let pc = metersXY(c, origin: a)
+        let pd = metersXY(d, origin: a)
+        func orient(_ p: (x: Double, y: Double), _ q: (x: Double, y: Double), _ r: (x: Double, y: Double)) -> Double {
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        }
+        let d1 = orient(pa, pb, pc)
+        let d2 = orient(pa, pb, pd)
+        let d3 = orient(pc, pd, pa)
+        let d4 = orient(pc, pd, pb)
+        let cross1 = (d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)
+        let cross2 = (d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)
+        return cross1 && cross2
     }
 
     /// DriftFix v2.4 自由路线（智能版）：
@@ -411,9 +531,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                 var shaped = self.smoothPolyline(pathCoords, passes: 2)
                 shaped[0] = points[0]
                 shaped[shaped.count - 1] = points[points.count - 1]
+                // DriftFix v2.7: 按速度区间重采样成 1 秒一点——节点直接播放会一秒跳几十米，
+                // 在 App 里看起来就是"GPS 漂移"。重采样后每秒位移 = 真实速度，轨迹连续。
+                let resampled = self.interpolateVariableRoute(coords: shaped, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: self.updateInterval)
                 self.polylineIsWGS = false
-                self.routePoints = shaped
-                self.totalPoints = shaped.count
+                self.routePoints = resampled.count >= 2 ? resampled : shaped
+                self.totalPoints = self.routePoints.count
                 self.currentPointIndex = 0
                 self.progress = 0.0
                 self.isSimulating = false
@@ -486,15 +609,16 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         runLeg(0)
     }
 
-    /// DriftFix v2.4 手画路线：简化（DP 5m）→ 平滑（2 轮）→ 变速插值就绪。
+    /// DriftFix v2.4 手画路线：简化（DP 5m）→ 平滑（2 轮）→ 变速重采样就绪。
     func buildFromDrawnPath(points: [CLLocationCoordinate2D], minSpeed: Double, maxSpeed: Double) -> Bool {
         guard points.count >= 2 else { return false }
         let simplified = simplifyPolyline(points, epsilon: 5.0)
         let shaped = smoothPolyline(simplified, passes: 2)
         guard shaped.count >= 2 else { return false }
+        let resampled = interpolateVariableRoute(coords: shaped, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
         polylineIsWGS = false
-        routePoints = shaped
-        totalPoints = shaped.count
+        routePoints = resampled.count >= 2 ? resampled : shaped
+        totalPoints = routePoints.count
         currentPointIndex = 0
         progress = 0.0
         isSimulating = false
@@ -586,8 +710,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func curvedSegment(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
         let d = distanceBetween(from, to)
         guard d > 0 else { return [from, to] }
-        let amp = min(d * 0.06, 30.0)
-        let steps = max(8, Int(d / 15))
+        let amp = min(d * 0.04, 20.0)
         let latScale = 111320.0
         let lonScale = 111320.0 * cos(from.latitude * Double.pi / 180)
         let dx = (to.longitude - from.longitude) * lonScale
@@ -851,14 +974,52 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    /// 保存当前已算好的路线（routePoints 换算成实际注入的 WGS 序列）。
-    func saveCurrentRoute(named rawName: String) -> Bool {
+    // MARK: - DriftFix v2.7 线路存档元数据
+    // 只存 GPX 点位时，重新载入只有一条线——起终点、途经点、出行方式、速度区间全丢，
+    // 点序列空着、也无法「重新生成」。元数据以 base64 塞进 <extensions>，
+    // 单文件随 GPX 一起走（导出/分享不丢），老存档无此段自动降级为首末点。
+    struct SavedRouteMeta: Codable {
+        var mode: String = "free"
+        var travelMode: String = TravelMode.walking.rawValue
+        var speedMinKmh: Double = 8.0
+        var speedMaxKmh: Double = 10.0
+        var skipPct: Double = 0
+        var swapEnds: Bool = false
+        var loops: Int = 1
+        var snapLong: Bool = true
+        var waypoints: [[Double]] = []      // 用户点列（GCJ 显示系，含起终点）
+        var waypointModes: [Bool] = []
+    }
+
+    struct RouteLoadResult {
+        let ok: Bool
+        let meta: SavedRouteMeta?
+    }
+
+    private static func metaTag(_ meta: SavedRouteMeta) -> String {
+        guard let data = try? JSONEncoder().encode(meta) else { return "" }
+        return "<extensions><andromedaMeta encoding=\"base64\">\(data.base64EncodedString())</andromedaMeta></extensions>\n"
+    }
+
+    private static func readMeta(from gpx: String) -> SavedRouteMeta? {
+        guard let open = gpx.range(of: "<andromedaMeta"),
+              let openEnd = gpx.range(of: ">", range: open.upperBound..<gpx.endIndex),
+              let close = gpx.range(of: "</andromedaMeta>", range: openEnd.upperBound..<gpx.endIndex) else { return nil }
+        let b64 = String(gpx[openEnd.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64Encoded: b64) else { return nil }
+        return try? JSONDecoder().decode(SavedRouteMeta.self, from: data)
+    }
+
+    /// 保存当前已算好的路线（routePoints 换算成实际注入的 WGS 序列）+ 元数据。
+    func saveCurrentRoute(named rawName: String, meta: SavedRouteMeta? = nil) -> Bool {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, routePoints.count >= 2 else { return false }
         let wgsPoints = routePoints.map { polylineIsWGS ? $0 : CoordTransform.gcj02ToWgs84($0) }
         var gpx = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         gpx += "<gpx version=\"1.1\" creator=\"Andromeda DriftFix\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
-        gpx += "<trk><name>\(Self.xmlEscape(name))</name><trkseg>\n"
+        gpx += "<trk><name>\(Self.xmlEscape(name))</name>\n"
+        if let meta = meta { gpx += Self.metaTag(meta) }
+        gpx += "<trkseg>\n"
         for p in wgsPoints {
             gpx += String(format: "<trkpt lat=\"%.7f\" lon=\"%.7f\"/>\n", p.latitude, p.longitude)
         }
@@ -876,11 +1037,15 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 加载已存线路：GPX 点列（WGS）直接作为注入序列，显示线转 GCJ。
-    func loadSavedRoute(at url: URL) -> Bool {
-        guard let result = GPXParser.parse(url: url), !result.isEmpty else { return false }
+    /// 加载已存线路：GPX 点列（WGS）直接作为注入序列，显示线转 GCJ；
+    /// 有元数据则一并恢复起终点/途经点/出行方式/速度区间（点序列与参数全部回填）。
+    func loadSavedRoute(at url: URL) -> RouteLoadResult {
+        guard let result = GPXParser.parse(url: url), !result.isEmpty else {
+            return RouteLoadResult(ok: false, meta: nil)
+        }
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let coords = result.allCoordinates
-        guard coords.count >= 2 else { return false }
+        guard coords.count >= 2 else { return RouteLoadResult(ok: false, meta: nil) }
 
         timer?.invalidate()
         timer = nil
@@ -906,7 +1071,33 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         estimatedMeters = savedMeters
         estimatedSteps = Int(savedMeters / strideForEstimate)
-        return true
+
+        let meta = Self.readMeta(from: text)
+        var restored: [CLLocationCoordinate2D] = []
+        if let m = meta {
+            for pair in m.waypoints where pair.count >= 2 {
+                restored.append(CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1]))
+            }
+        }
+        if restored.count >= 2 {
+            userWaypoints = restored
+        } else {
+            // 老存档没有元数据：至少用首末点回填起终点，点序列不再是空的
+            userWaypoints = [coords[0], coords[coords.count - 1]]
+        }
+        waypointModes = []
+        for i in 0..<userWaypoints.count {
+            let flag = (meta?.waypointModes.count ?? 0) > i ? (meta?.waypointModes[i] ?? false) : false
+            waypointModes.append(flag)
+        }
+        if let m = meta {
+            routeMode = RouteMode(rawValue: m.mode) ?? routeMode
+            travelMode = TravelMode(rawValue: m.travelMode) ?? travelMode
+            speedMinMps = m.speedMinKmh / 3.6
+            speedMaxMps = m.speedMaxKmh / 3.6
+        }
+        visitSequenceText = ""
+        return RouteLoadResult(ok: true, meta: meta)
     }
 
     // MARK: - DriftFix v2.5 线路管理（重命名/删除/排序/分享导出）
