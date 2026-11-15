@@ -876,14 +876,13 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Geranium/Geranium.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_ASSET_PATHS = "\"Geranium/Preview Content\"";
 				DEVELOPMENT_TEAM = 7G89J82G2A;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Geranium/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Andromeda;
-				INFOPLIST_KEY_CFBundleDisplayName = Andromeda;
+				INFOPLIST_KEY_CFBundleDisplayName = "自由轨迹";
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "Enabling location for Geranium makes it possible for the app to display your location on the map.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This will allow the app to display your location on the LocSim map.";
@@ -898,7 +897,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.5.2;
+				MARKETING_VERSION = 2.5.11-freetrack;
 				PRODUCT_BUNDLE_IDENTIFIER = com.son3ra1n.andromeda;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -916,14 +915,13 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Geranium/Geranium.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_ASSET_PATHS = "\"Geranium/Preview Content\"";
 				DEVELOPMENT_TEAM = 7G89J82G2A;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Geranium/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Andromeda;
-				INFOPLIST_KEY_CFBundleDisplayName = Andromeda;
+				INFOPLIST_KEY_CFBundleDisplayName = "自由轨迹";
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "Enabling location for Geranium makes it possible for the app to display your location on the map.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This will allow the app to display your location on the LocSim map.";
@@ -938,7 +936,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.5.2;
+				MARKETING_VERSION = 2.5.11-freetrack;
 				PRODUCT_BUNDLE_IDENTIFIER = com.son3ra1n.andromeda;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
