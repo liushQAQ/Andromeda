@@ -68,6 +68,9 @@ struct RouteSimSheet: View {
     @State private var areaSelecting: Int = 1          // 0=移动地图 1=手画区域
     @State private var areaPickerRegion: MKCoordinateRegion? = nil
     @State private var areaDraftPolygon: [CLLocationCoordinate2D]? = nil
+    @State private var areaShapeKind: Int = 0          // v2.7.6: 0=手画区域 1=圆形区域
+    @State private var circleCenter: CLLocationCoordinate2D? = nil
+    @State private var circleRadius: Double = 300
     @State private var showDrawOverlay: Bool = false
     @State private var optimizedPoints: [CLLocationCoordinate2D]? = nil
     @State private var drawPreviewOn: Bool = false
@@ -778,10 +781,10 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
 
             HStack(spacing: 8) {
-                Button(action: openAreaPicker) {
+                Button(action: { openAreaPicker(kind: 0) }) {
                     HStack(spacing: 6) {
                         Image(systemName: "pencil.tip")
-                        Text(routeSimulator.areaPolygon == nil ? "手画区域" : "重新画")
+                        Text(routeSimulator.areaPolygon == nil ? "手画区域" : "重画")
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
@@ -789,9 +792,21 @@ struct RouteSimSheet: View {
                     .foregroundColor(.purple)
                     .font(.subheadline.weight(.semibold))
                 }
+                Button(action: { openAreaPicker(kind: 1) }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "circle.dashed")
+                        Text("圆形区域")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.teal.opacity(0.15)))
+                    .foregroundColor(.teal)
+                    .font(.subheadline.weight(.semibold))
+                }
                 if routeSimulator.areaPolygon != nil {
                     Button(action: {
                         routeSimulator.areaPolygon = nil
+                        routeSimulator.areaCircleCenter = nil
                         routeReady = false
                     }) {
                         Text("清除")
@@ -820,7 +835,7 @@ struct RouteSimSheet: View {
             }
             .padding(.horizontal)
 
-            Text("怎么走：起点先进区域 → 在画出来的范围内按街道蛇形绕行（不会来回交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。形状按你画的来，不再套方框。")
+            Text("怎么走：起点先进区域 → 在选定的范围内按街道蛇形绕行（不会来回交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。区域可以手画，也可以只点一个中心、拖一个半径。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -851,7 +866,7 @@ struct RouteSimSheet: View {
                 }
                 .foregroundColor(.red)
                 Spacer()
-                Text("手画区域")
+                Text(areaShapeKind == 1 ? "圆形区域" : "手画区域")
                     .font(.headline)
                 Spacer()
                 Button(action: commitArea) {
@@ -863,25 +878,67 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             .padding(.vertical, 10)
 
-            Picker("", selection: $areaSelecting) {
-                Text("移动地图").tag(0)
-                Text("手画区域").tag(1)
+            Picker("", selection: $areaShapeKind) {
+                Text("手画区域").tag(0)
+                Text("圆形区域").tag(1)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
+            .onChange(of: areaShapeKind) { v in
+                areaDraftPolygon = nil
+                if v == 1 {
+                    if circleCenter == nil {
+                        circleCenter = routeSimulator.userWaypoints.first ?? areaPickerRegion?.center
+                    }
+                    applyCircleDraft()
+                    if let c = circleCenter {
+                        let span = max(circleRadius * 4, 1200)
+                        areaPickerRegion = MKCoordinateRegion(center: c,
+                                                              latitudinalMeters: span,
+                                                              longitudinalMeters: span)
+                    }
+                } else {
+                    areaSelecting = 1
+                }
+            }
+
+            if areaShapeKind == 0 {
+                Picker("", selection: $areaSelecting) {
+                    Text("移动地图").tag(0)
+                    Text("手画区域").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+            }
 
             ZStack {
-                AreaDrawMapView(
-                    polygon: $areaDraftPolygon,
-                    moveToRegion: $areaPickerRegion,
-                    selecting: areaSelecting == 1,
-                    start: routeSimulator.userWaypoints.first,
-                    end: routeSimulator.userWaypoints.count >= 2 ? routeSimulator.userWaypoints.last : nil
-                )
+                if areaShapeKind == 1 {
+                    CircleAreaMapView(
+                        center: circleCenter,
+                        radiusMeters: circleRadius,
+                        moveToRegion: $areaPickerRegion,
+                        start: routeSimulator.userWaypoints.first,
+                        end: routeSimulator.userWaypoints.count >= 2 ? routeSimulator.userWaypoints.last : nil,
+                        onPick: { c in
+                            circleCenter = c
+                            applyCircleDraft()
+                        }
+                    )
+                } else {
+                    AreaDrawMapView(
+                        polygon: $areaDraftPolygon,
+                        moveToRegion: $areaPickerRegion,
+                        selecting: areaSelecting == 1,
+                        start: routeSimulator.userWaypoints.first,
+                        end: routeSimulator.userWaypoints.count >= 2 ? routeSimulator.userWaypoints.last : nil
+                    )
+                }
                 if areaDraftPolygon == nil {
-                    Text(areaSelecting == 1
-                         ? "按住手指，沿着要绕行的范围画一圈\n松手自动闭合；画歪了再画一次直接覆盖"
-                         : "先移动/缩放地图到要走的范围，再切「手画区域」")
+                    Text(areaShapeKind == 1
+                         ? "长按地图放中心点，再拖下面的半径"
+                         : (areaSelecting == 1
+                            ? "按住手指，沿着要绕行的范围画一圈\n松手自动闭合；画歪了再画一次直接覆盖"
+                            : "先移动/缩放地图到要走的范围，再切「手画区域」"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -894,6 +951,38 @@ struct RouteSimSheet: View {
             .frame(maxHeight: .infinity)
             .cornerRadius(12)
             .padding(.horizontal, 12)
+
+            if areaShapeKind == 1 {
+                HStack(spacing: 8) {
+                    Text("半径")
+                        .font(.caption)
+                        .frame(width: 34)
+                    Slider(value: $circleRadius, in: 80...1500, step: 20)
+                        .onChange(of: circleRadius) { _ in applyCircleDraft() }
+                    Text("\(Int(circleRadius)) 米")
+                        .font(.caption)
+                        .frame(width: 56)
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+                HStack(spacing: 8) {
+                    ForEach([100.0, 200.0, 300.0, 500.0, 800.0], id: \.self) { r in
+                        Button(action: {
+                            circleRadius = r
+                            applyCircleDraft()
+                        }) {
+                            Text("\(Int(r))m")
+                                .font(.caption2)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(RoundedRectangle(cornerRadius: 8)
+                                    .fill(abs(circleRadius - r) < 1 ? Color.teal.opacity(0.25) : Color(UIColor.secondarySystemBackground)))
+                                .foregroundColor(abs(circleRadius - r) < 1 ? .teal : .secondary)
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            }
 
             if let poly = areaDraftPolygon {
                 let enough = RouteSimulator.polygonAreaM2(poly) >= RouteSimulator.minAreaM2
@@ -932,10 +1021,38 @@ struct RouteSimSheet: View {
         .zIndex(12)
     }
 
-    private func openAreaPicker() {
-        areaDraftPolygon = routeSimulator.areaPolygon
-        areaSelecting = routeSimulator.areaPolygon == nil ? 1 : 0
-        if let poly = routeSimulator.areaPolygon,
+    /// 圆形区域 → 多边形草稿（48 边）。半径或中心一变就重算，面板里的面积/亩跟着走。
+    private func applyCircleDraft() {
+        guard let c = circleCenter else {
+            areaDraftPolygon = nil
+            return
+        }
+        areaDraftPolygon = RouteSimulator.circlePolygon(center: c, radiusMeters: circleRadius)
+    }
+
+    private func openAreaPicker(kind: Int) {
+        areaShapeKind = kind
+        if kind == 1 {
+            if let c = routeSimulator.areaCircleCenter {
+                circleCenter = c
+                circleRadius = routeSimulator.areaCircleRadius
+            } else {
+                circleCenter = routeSimulator.userWaypoints.first ?? mapRegion?.center
+                circleRadius = 300
+            }
+            areaDraftPolygon = nil
+            applyCircleDraft()
+        } else {
+            areaDraftPolygon = routeSimulator.areaPolygon
+            areaSelecting = routeSimulator.areaPolygon == nil ? 1 : 0
+        }
+
+        if kind == 1, let c = circleCenter {
+            let span = max(circleRadius * 4, 1200)
+            areaPickerRegion = MKCoordinateRegion(center: c,
+                                                  latitudinalMeters: span,
+                                                  longitudinalMeters: span)
+        } else if let poly = routeSimulator.areaPolygon,
            let b = RouteSimulator.AreaRect.bounding(of: poly) {
             areaPickerRegion = MKCoordinateRegion(center: b.center,
                                                   latitudinalMeters: max(b.heightMeters * 1.6, 1500),
@@ -973,12 +1090,18 @@ struct RouteSimSheet: View {
             return
         }
         routeSimulator.areaPolygon = poly
+        if areaShapeKind == 1, let c = circleCenter {
+            routeSimulator.areaCircleCenter = c
+            routeSimulator.areaCircleRadius = circleRadius
+        } else {
+            routeSimulator.areaCircleCenter = nil
+        }
         routeReady = false
         showAreaPicker = false
         mapRegion = MKCoordinateRegion(center: b.center,
                                        latitudinalMeters: max(b.heightMeters * 1.4, 800),
                                        longitudinalMeters: max(b.widthMeters * 1.4, 800))
-        AlertKitAPI.present(title: "区域已画好 \(areaSummary(poly))", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        AlertKitAPI.present(title: "区域已选好 \(areaSummary(poly))", icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     // MARK: - DriftFix v2.9 手画路线弹层（画笔 / 移动 / 修改 三模式，笔画常驻可反复改）
@@ -2414,6 +2537,104 @@ struct AreaDrawMapView: UIViewRepresentable {
                 r.strokeColor = UIColor.systemPurple
                 r.lineWidth = 3
                 r.alpha = 0.9
+                return r
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let a = annotation as? AreaPinAnnotation else { return nil }
+            let id = "AreaPin"
+            let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation: a, reuseIdentifier: id)
+            v.annotation = a
+            v.canShowCallout = false
+            v.markerTintColor = a.tint
+            v.glyphText = a.title
+            v.displayPriority = .required
+            v.animatesWhenAdded = false
+            return v
+        }
+    }
+}
+
+/// v2.7.6 圆形区域选点（参考 LocSuper 的「扫街」：中心点 + 半径，两步选完，不用描边）。
+/// 地图只负责「放中心」；半径由下面的滑杆给，圆本身只是给眼睛看的预览。
+struct CircleAreaMapView: UIViewRepresentable {
+    var center: CLLocationCoordinate2D?
+    var radiusMeters: Double
+    @Binding var moveToRegion: MKCoordinateRegion?
+    var start: CLLocationCoordinate2D?
+    var end: CLLocationCoordinate2D?
+    var onPick: (CLLocationCoordinate2D) -> Void
+
+    func makeUIView(context: Context) -> MKMapView {
+        let mv = MKMapView()
+        mv.delegate = context.coordinator
+        mv.isPitchEnabled = false
+        mv.isRotateEnabled = false
+        mv.showsCompass = false
+        mv.pointOfInterestFilter = .includingAll
+        let lp = UILongPressGestureRecognizer(target: context.coordinator,
+                                              action: #selector(Coordinator.handleLongPress(_:)))
+        lp.minimumPressDuration = 0.35
+        mv.addGestureRecognizer(lp)
+        return mv
+    }
+
+    func updateUIView(_ uiView: MKMapView, context: Context) {
+        context.coordinator.parent = self
+        if let region = moveToRegion {
+            uiView.setRegion(region, animated: true)
+            DispatchQueue.main.async { self.moveToRegion = nil }
+        }
+        context.coordinator.sync(uiView, center: center, radius: radiusMeters, start: start, end: end)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: CircleAreaMapView
+        private var lastSig = "-"
+
+        init(_ parent: CircleAreaMapView) { self.parent = parent }
+
+        @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
+            guard g.state == .began, let mv = g.view as? MKMapView else { return }
+            let c = mv.convert(g.location(in: mv), toCoordinateFrom: mv)
+            parent.onPick(c)
+        }
+
+        func sync(_ mv: MKMapView, center: CLLocationCoordinate2D?, radius: Double,
+                  start: CLLocationCoordinate2D?, end: CLLocationCoordinate2D?) {
+            let cSig = center.map { String(format: "%.6f,%.6f", $0.latitude, $0.longitude) } ?? "-"
+            let sSig = start.map { String(format: "%.6f,%.6f", $0.latitude, $0.longitude) } ?? "-"
+            let eSig = end.map { String(format: "%.6f,%.6f", $0.latitude, $0.longitude) } ?? "-"
+            let sig = String(format: "%@|%.0f|%@|%@", cSig, radius, sSig, eSig)
+            if sig == lastSig { return }
+            lastSig = sig
+
+            for o in mv.overlays where o is MKCircle { mv.removeOverlay(o) }
+            mv.removeAnnotations(mv.annotations.filter { $0 is AreaPinAnnotation })
+            if let c = center {
+                mv.addOverlay(MKCircle(center: c, radius: radius))
+                mv.addAnnotation(AreaPinAnnotation(coordinate: c, title: "中", tint: .systemTeal))
+            }
+            if let s = start {
+                mv.addAnnotation(AreaPinAnnotation(coordinate: s, title: "起", tint: .systemGreen))
+            }
+            if let e = end {
+                mv.addAnnotation(AreaPinAnnotation(coordinate: e, title: "终", tint: .systemRed))
+            }
+        }
+
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let circle = overlay as? MKCircle {
+                let r = MKCircleRenderer(circle: circle)
+                r.fillColor = UIColor.systemTeal.withAlphaComponent(0.14)
+                r.strokeColor = UIColor.systemTeal
+                r.lineWidth = 2
+                r.lineDashPattern = [NSNumber(value: 6), NSNumber(value: 4)]
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)

@@ -102,6 +102,11 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 小区/公园/校区基本都不是规整矩形，框大了跑出边界，框小了漏掉一半。
     // 存多边形顶点（GCJ 显示系，首尾不重复、顺序闭合），外接矩形只用于切车道方向。
     @Published var areaPolygon: [CLLocationCoordinate2D]? = nil
+    // v2.7.6：圆形区域（中心 + 半径）。参考 LocSuper「扫街」的选法——
+    // 大多数人画不出一圈像样的多边形，而「点一下中心、拖一个半径」两步就能选完。
+    // 圆形在内部转成 48 边形，面积校验 / 蛇形 / 贴路全部复用，不多一条算法分支。
+    @Published var areaCircleCenter: CLLocationCoordinate2D? = nil
+    @Published var areaCircleRadius: Double = 300
     @Published var areaTargetKm: Double = 5.0                     // DriftFix v3.0: 目标里程（公里）
     @Published var visitSequenceText: String = ""                 // 本次实际访问顺序（起→#3→#1→终）
     @Published var estimatedMeters: Double = 0                    // DriftFix v2.6: 预估总里程（米）
@@ -383,6 +388,26 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             return String(format: "%.1f 万 m²（约 %.0f 亩）", m2 / 10000, m2 / 666.67)
         }
         return String(format: "%.0f m²（约 %.1f 亩）", m2, m2 / 666.67)
+    }
+
+    /// 圆形区域 → 多边形（默认 48 边，面积误差 <0.3%）。
+    /// 中心 + 半径是 LocSuper「扫街」那套选法：不用画圈，也不会画出自交多边形。
+    static func circlePolygon(center: CLLocationCoordinate2D,
+                              radiusMeters: Double,
+                              segments: Int = 48) -> [CLLocationCoordinate2D] {
+        let n = max(12, min(96, segments))
+        let r = max(60.0, min(5000.0, radiusMeters))
+        let latScale = 111320.0
+        let lonScale = max(1.0, 111320.0 * cos(center.latitude * Double.pi / 180))
+        var out: [CLLocationCoordinate2D] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let t = 2.0 * Double.pi * Double(i) / Double(n)
+            out.append(CLLocationCoordinate2D(
+                latitude: center.latitude + (r * sin(t)) / latScale,
+                longitude: center.longitude + (r * cos(t)) / lonScale))
+        }
+        return out
     }
 
     /// 多边形面积（平方米，Shoelace + 米制投影）
