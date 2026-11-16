@@ -137,6 +137,25 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 原来第 0 秒投起点、第 1 秒就出发，等于在收敛窗口里就开始走，首段容易被吞或被拉回。
     private var warmupTicks = 0
 
+    // MARK: - DriftFix v2.7.10 轨迹拟真（抹掉「合成感」）
+    // 纯等距折线 + 精度恒定 4~9 米，本身就是机器特征：真机每一拍都在 1 米内低频游走，
+    // 钻进树荫/桥洞时精度会掉到二三十米、几秒后恢复。这里加的都是界面上看不出来的量：
+    //   · 注入坐标低频游走（一阶惯性，相关时间 25 秒，上限 1.2 米）—— 街道级缩放不到 1 像素；
+    //     绝不是逐秒独立随机（那是 v3.2 已经修掉的锯齿/漂移）；
+    //   · 每 2~6 公里偶发 3~8 秒精度骤降（18~45 米）；
+    //   · 垂直精度 8~18 米慢变（原来恒 12 米，固定值本身也是一条特征）。
+    // 显示层与存档仍用未加噪的原始折线 —— 地图上看到的还是你画的那条线。
+    private var gpsRealism: Bool = (UserDefaults.standard.object(forKey: "andromedaGpsRealism") as? Bool) ?? true
+    private var noiseEast: Double = 0.0
+    private var noiseNorth: Double = 0.0
+    private var noiseLastAt: Date = .distantPast
+    private var metersSinceDropout: Double = 0.0
+    private var nextDropoutMeters: Double = 2500.0
+    private var dropoutUntil: Date = .distantPast
+    private var dropoutAccuracy: Double = 25.0
+    private var reportedVertical: Double = 12.0
+    private var verticalNextUpdate = Date.distantPast
+
     // MARK: - DriftFix v2.2 速度区间（m/s）
     // 匀速轨迹一眼假。播放时速度在 [min,max] 内慢速随机游走（带回归中值的惯性），
     // 相邻点间距=当前速度×1s。GPX 存档保存的是实际注入序列（变间距），重放逐点还原。
@@ -1812,6 +1831,14 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         lastInjected = nil
         accuracyNextUpdate = .distantPast
         warmupTicks = 2          // 原地 2 拍再起步，让定位先落到起点
+        // v2.7.10：每次开始都重置拟真状态，不然上一趟残留的噪声偏移会被当成"位置漂了一下"
+        noiseEast = 0.0
+        noiseNorth = 0.0
+        noiseLastAt = .distantPast
+        metersSinceDropout = 0.0
+        nextDropoutMeters = Double.random(in: 2000.0...6000.0)
+        dropoutUntil = .distantPast
+        verticalNextUpdate = .distantPast
         updateLocation(at: 0)
         
         timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
@@ -1918,13 +1945,16 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             accuracyNextUpdate = now.addingTimeInterval(Double.random(in: 12.0...25.0))
         }
 
-        // 用"上一拍实际投出去的坐标"算瞬时速度和航向；停着不动就是 0 速、无航向
+        // 用"上一拍的基准坐标"算瞬时速度和航向；停着不动就是 0 速、无航向。
+        // 基准坐标不带噪声 —— 速度是融合引擎滤波后的量，拿带噪坐标反推会把速度放大成乱跳。
         var speed = 0.0
         var course = -1.0
+        var stepMeters = 0.0
         if let last = lastInjected {
             let dt = min(max(now.timeIntervalSince(last.at), 0.5), 2.0)
             let d = CLLocation(latitude: last.coord.latitude, longitude: last.coord.longitude)
                 .distance(from: CLLocation(latitude: wgsCoord.latitude, longitude: wgsCoord.longitude))
+            stepMeters = d
             speed = d / dt
             if d > 0.3 {
                 course = bearing(from: last.coord, to: wgsCoord)
@@ -1933,17 +1963,71 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
 
+        // v2.7.10 拟真：精度骤降 + 垂直精度慢变 + 注入坐标低频游走（显示与存档不受影响）
+        var accuracy = reportedAccuracy
+        var vertical = reportedVertical
+        var emitCoord = wgsCoord
+        if gpsRealism {
+            metersSinceDropout += stepMeters
+            if now >= dropoutUntil {
+                if metersSinceDropout >= nextDropoutMeters {
+                    dropoutUntil = now.addingTimeInterval(Double.random(in: 3.0...8.0))
+                    dropoutAccuracy = Double.random(in: 18.0...45.0)
+                    metersSinceDropout = 0.0
+                    nextDropoutMeters = Double.random(in: 2000.0...6000.0)
+                }
+            } else {
+                accuracy = max(accuracy, dropoutAccuracy)
+            }
+            if now >= verticalNextUpdate {
+                reportedVertical = Double.random(in: 8.0...18.0)
+                verticalNextUpdate = now.addingTimeInterval(Double.random(in: 20.0...60.0))
+            }
+            vertical = reportedVertical
+            emitCoord = jittered(wgsCoord, at: now)
+        }
+
         let location = CLLocation(
-            coordinate: wgsCoord,
+            coordinate: emitCoord,
             altitude: altitude,
-            horizontalAccuracy: reportedAccuracy,
-            verticalAccuracy: 12,
+            horizontalAccuracy: accuracy,
+            verticalAccuracy: vertical,
             course: course,
             speed: speed,
             timestamp: now
         )
         lastInjected = (wgsCoord, now)
         LocSimManager.startLocSim(location: location)
+    }
+
+    /// v2.7.10：给注入坐标叠一层「低频游走」，像真 GPS 而不是数学折线。
+    /// 一阶惯性：offset ← offset·e^(-dt/25) + 高斯·σ·√(1-e^(-2dt/25))，稳态标准差 0.6 米、上限 1.2 米。
+    /// 相邻两拍只差几厘米，绝不会出现 v3.2 那种每秒横甩的锯齿。
+    private func jittered(_ c: CLLocationCoordinate2D, at now: Date) -> CLLocationCoordinate2D {
+        let dt = (noiseLastAt == .distantPast) ? 1.0 : min(max(now.timeIntervalSince(noiseLastAt), 0.0), 3.0)
+        noiseLastAt = now
+        let tau = 25.0
+        let decay = exp(-dt / tau)
+        let sigma = 0.60
+        let k = sqrt(max(0.0, 1.0 - decay * decay))
+        noiseEast  = noiseEast  * decay + gaussRandom() * sigma * k
+        noiseNorth = noiseNorth * decay + gaussRandom() * sigma * k
+        let mag = sqrt(noiseEast * noiseEast + noiseNorth * noiseNorth)
+        if mag > 1.2 {
+            noiseEast  *= 1.2 / mag
+            noiseNorth *= 1.2 / mag
+        }
+        let dLat = noiseNorth / 110540.0
+        let dLon = noiseEast / max(111320.0 * cos(c.latitude * .pi / 180.0), 1.0)
+        return CLLocationCoordinate2D(latitude: c.latitude + dLat, longitude: c.longitude + dLon)
+    }
+
+    /// Box-Muller：两个均匀分布 → 标准正态
+    private func gaussRandom() -> Double {
+        var u = Double.random(in: 0.0...1.0)
+        if u < 1e-9 { u = 1e-9 }
+        let v = Double.random(in: 0.0...1.0)
+        return sqrt(-2.0 * log(u)) * cos(2.0 * .pi * v)
     }
 
     /// 方位角（0° = 正北，顺时针）
