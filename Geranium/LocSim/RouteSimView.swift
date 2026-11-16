@@ -835,7 +835,7 @@ struct RouteSimSheet: View {
             }
             .padding(.horizontal)
 
-            Text("怎么走：起点先进区域 → 在选定的范围内按街道蛇形绕行（不会来回交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。区域可以手画，也可以只点一个中心、拖一个半径。")
+            Text("怎么走：起点先进区域 → 把区域切成几十米一格，每步只在隔壁格子里就近随机走（像人在街区里逛，不会横穿飞过去、不会满图乱交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。区域可以手画，也可以只点一个中心、拖一个半径。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
