@@ -526,6 +526,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let flipAll = randomFlip && Bool.random()
 
         var out: [Int] = []
+        var prevLeg: [Int] = []
         let loopCount = max(1, loops)
         for _ in 0..<loopCount {
             var fixed: [Int] = []
@@ -543,10 +544,23 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
             var leg = smoothOrder(fixed: fixed, wilds: wilds, n: n)
             if flipAll { leg.reverse() }
+            // 第二圈起：上一圈停在终点，下一圈又从起点开始。如果直接连过去，
+            // 就是一条横穿整张地图的直线（老总说的「开飞机」）。这里改成沿上一圈
+            // 原路走回来——人多跑一圈本来也是这么走的，既连贯又不会乱穿。
+            if !prevLeg.isEmpty, let lastIdx = out.last, let headIdx = leg.first,
+               distanceBetween(userWaypoints[lastIdx], userWaypoints[headIdx]) > 150 {
+                var k = prevLeg.count - 2
+                while k >= 0 {
+                    if let last = out.last, last == prevLeg[k] { k -= 1; continue }
+                    out.append(prevLeg[k])
+                    k -= 1
+                }
+            }
             for i in leg {
                 if let last = out.last, last == i { continue }  // 圈间接缝去重
                 out.append(i)
             }
+            prevLeg = leg
             // 往返：每圈原路再跑回来（去一回一）；绕圈 N 次 = N 个来回
             if swapEnds {
                 var back: [Int] = []
@@ -618,7 +632,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                     distanceBetween(userWaypoints[cur], userWaypoints[$0]) < distanceBetween(userWaypoints[cur], userWaypoints[$1])
                 }
                 var pick = 0
-                if jitter && ordered.count > 1 && Bool.random() { pick = 1 }
+                if jitter && ordered.count > 1 {
+                    // 只在「最近的三个」里随机：最近的最常用，次近次之，第三近偶尔——
+                    // 这样每次生成略有不同，但绝不会跳到远处去（跳远就是「开飞机」）。
+                    let r = Double.random(in: 0..<1)
+                    if r > 0.88 && ordered.count > 2 { pick = 2 }
+                    else if r > 0.66 { pick = 1 }
+                }
                 let next = ordered[pick]
                 out.append(next)
                 remain.removeAll { $0 == next }
@@ -1196,6 +1216,143 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return AreaPlan(spacing: spacing, laps: laps)
     }
 
+    /// v2.7.7 网格就近随机走位（老总原话：「不要像开飞机一样在天上飞、胡乱交叉，
+    /// 要有顺序，就像网格一样，只能就近点位随机选择一个」）。
+    ///
+    /// 做法：把区域按 cell 米切开，留下落在形状内的格点；从离起点最近的格点出发，
+    /// 每一步只在上下左右四个邻格中挑一个——同向直行权重最高、拐弯次之、掉头几乎不选，
+    /// 没走过的格优先，最后几格自动朝终点收。于是：
+    ///   · 任意一腿只有一个格子长，不会横跨几百米，不可能出现「飞行线」；
+    ///   · 走向始终是相邻格，天然排成网格，不会满图乱穿；
+    ///   · 走过的格偶尔可以再进（人也会绕回原路），但权重很低，不会原地打转。
+    private func areaGridWalk(polygon: [CLLocationCoordinate2D],
+                              cell: Double,
+                              from start: CLLocationCoordinate2D,
+                              to end: CLLocationCoordinate2D,
+                              targetMeters: Double) -> [CLLocationCoordinate2D] {
+        guard polygon.count >= 3, cell > 10 else { return [] }
+        let lats = polygon.map { $0.latitude }
+        let lons = polygon.map { $0.longitude }
+        guard let latMin0 = lats.min(), let latMax0 = lats.max(),
+              let lonMin0 = lons.min(), let lonMax0 = lons.max() else { return [] }
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos((latMin0 + latMax0) / 2 * Double.pi / 180)
+        guard lonScale > 1 else { return [] }
+
+        // 格架向内缩 1/4 格：贴边的点会落在多边形边界上，射线法判内外不稳
+        let padLat = 0.25 * cell / latScale
+        let padLon = 0.25 * cell / lonScale
+        let latMin = latMin0 + padLat, latMax = latMax0 - padLat
+        let lonMin = lonMin0 + padLon, lonMax = lonMax0 - padLon
+        guard latMax > latMin, lonMax > lonMin else { return [] }
+        let cols = min(72, max(2, Int(((lonMax - lonMin) * lonScale) / cell) + 1))
+        let rows = min(72, max(2, Int(((latMax - latMin) * latScale) / cell) + 1))
+        let stepX = (lonMax - lonMin) / Double(cols - 1)
+        let stepY = (latMax - latMin) / Double(rows - 1)
+
+        func coord(_ i: Int, _ j: Int) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: latMin + stepY * Double(j),
+                                   longitude: lonMin + stepX * Double(i))
+        }
+
+        func inPolygon(_ p: CLLocationCoordinate2D) -> Bool {
+            var inside = false
+            var j = polygon.count - 1
+            for i in 0..<polygon.count {
+                let a = polygon[i], b = polygon[j]
+                if (a.latitude > p.latitude) != (b.latitude > p.latitude) {
+                    let f = (p.latitude - a.latitude) / (b.latitude - a.latitude)
+                    if p.longitude < a.longitude + f * (b.longitude - a.longitude) {
+                        inside.toggle()
+                    }
+                }
+                j = i
+            }
+            return inside
+        }
+
+        var ok = [Bool](repeating: false, count: cols * rows)
+        for j in 0..<rows {
+            for i in 0..<cols {
+                ok[j * cols + i] = inPolygon(coord(i, j))
+            }
+        }
+        var usable: [Int] = []
+        for k in 0..<(cols * rows) where ok[k] { usable.append(k) }
+        guard usable.count >= 4 else { return [] }
+
+        func nearestNode(to p: CLLocationCoordinate2D) -> Int {
+            var best = usable[0]
+            var bestD = Double.greatestFiniteMagnitude
+            for k in usable {
+                let d = distanceBetween(coord(k % cols, k / cols), p)
+                if d < bestD { bestD = d; best = k }
+            }
+            return best
+        }
+
+        let startNode = nearestNode(to: start)
+        let cellLen = max(stepX * lonScale, stepY * latScale)
+        guard cellLen > 10 else { return [] }
+        let goal = max(cellLen * 4, targetMeters * 0.9)
+
+        var visit = [Int](repeating: 0, count: cols * rows)
+        var cur = startNode
+        visit[cur] = 1
+        var out: [CLLocationCoordinate2D] = [coord(cur % cols, cur / cols)]
+        var walked = 0.0
+        var prevDir = -1                       // -1 起步；0 东 1 西 2 北 3 南（反向 = d ^ 1）
+        let dirs: [(Int, Int)] = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        var spins = 0
+
+        while walked < goal && spins < 40000 {
+            spins += 1
+            let ci = cur % cols, cj = cur / cols
+            var cands: [(node: Int, dir: Int, w: Double)] = []
+            for (dir, step) in dirs.enumerated() {
+                let ni = ci + step.0, nj = cj + step.1
+                if ni < 0 || ni >= cols || nj < 0 || nj >= rows { continue }
+                let nk = nj * cols + ni
+                if !ok[nk] { continue }
+                var w = 1.0
+                if dir == prevDir {
+                    w *= 3.6                                    // 一直往前走：最像人在走直线
+                } else if prevDir >= 0 && dir == (prevDir ^ 1) {
+                    w *= 0.10                                    // 原路掉头：几乎不选
+                } else if prevDir >= 0 {
+                    w *= 1.5                                     // 拐 90°：正常
+                }
+                if visit[nk] == 0 {
+                    w *= 5.0                                     // 没走过的格优先，把区域铺开
+                } else {
+                    w *= max(0.05, 1.0 / Double(visit[nk] + 1))
+                }
+                let remain = goal - walked
+                if remain < cellLen * 8 {
+                    let here = coord(ci, cj)
+                    let next = coord(ni, nj)
+                    w *= distanceBetween(next, end) < distanceBetween(here, end) ? 3.0 : 0.7
+                }
+                w *= Double.random(in: 0.75...1.25)
+                cands.append((nk, dir, w))
+            }
+            guard !cands.isEmpty else { break }
+            let total = cands.reduce(0.0) { $0 + $1.w }
+            var pick = Double.random(in: 0..<total)
+            var chosen = cands[0]
+            for c in cands {
+                pick -= c.w
+                if pick <= 0 { chosen = c; break }
+            }
+            cur = chosen.node
+            prevDir = chosen.dir
+            visit[cur] += 1
+            out.append(coord(cur % cols, cur / cols))
+            walked += cellLen
+        }
+        return out
+    }
+
     /// 多边形蛇形锚点（DriftFix v3.2，替代按矩形切车道）：
     /// 沿一个方向逐条扫描线切开手画区域，扫描线与多边形边的交点两两配对得到「内部区间」，
     /// 区间内每 ≈350m 一个锚点，奇偶行反向。天然只在画出来的形状里走、不来回交叉；
@@ -1324,16 +1481,26 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         allRoutePolylines = []
         selectedRouteIndex = 0
 
-        let area = fitAreaPolygon(polygon, targetMeters: target)
-        let plan = planArea(rect: AreaRect.bounding(of: area) ?? bounds, targetMeters: target)
-        var anchors: [CLLocationCoordinate2D] = [start]
-        var cursor = start
-        for _ in 0..<plan.laps {
-            let lanes = areaSerpentine(polygon: area, spacing: plan.spacing, startFrom: cursor)
-            if lanes.count < 2 { break }
-            anchors.append(contentsOf: lanes)
-            cursor = lanes[lanes.count - 1]
+        // v2.7.7 网格就近随机（老总：不要像开飞机一样直切、不要胡乱交叉，像网格一样只挑隔壁点）。
+        // 原来每 350 米才放一个锚点，两点之间只能拉直线——一公里长的区域看着就是贴地飞。
+        // 现在先把区域切成几十米一格，每一步只走上下左右一个格，天然贴地、天然成网格。
+        let minSide = min(bounds.widthMeters, bounds.heightMeters)
+        let cell = max(40.0, min(90.0, minSide / 4.0))
+        var anchors = areaGridWalk(polygon: polygon, cell: cell, from: start, to: end, targetMeters: target)
+        if anchors.count < 3 {
+            // 区域太小或太窄，格点凑不出来：退回蛇形，能走多少算多少
+            let plan = planArea(rect: bounds, targetMeters: target)
+            anchors = []
+            var cursor = start
+            for _ in 0..<plan.laps {
+                let lanes = areaSerpentine(polygon: polygon, spacing: plan.spacing, startFrom: cursor)
+                if lanes.count < 2 { break }
+                anchors.append(contentsOf: lanes)
+                cursor = lanes[lanes.count - 1]
+            }
         }
+        if anchors.isEmpty { anchors = [start] }
+        anchors.insert(start, at: 0)
         anchors.append(end)
 
         var path: [CLLocationCoordinate2D] = []
@@ -1395,6 +1562,11 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
 
+        // 网格走位之后，绝大多数腿只有几十米，没必要逐段问 Apple 的步行路线
+        // （一段一问会被限流，而且 60 米也问不出街道）。只给「进区域 / 出区域」这类
+        // 超过 120 米的腿留 10 次贴路预算，其余一律按格线走。
+        var roadBudget = 10
+
         func step() {
             if legIndex >= anchors.count - 1 {
                 finish()
@@ -1403,13 +1575,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             let from = anchors[legIndex]
             let to = anchors[legIndex + 1]
             let d = self.distanceBetween(from, to)
-            let idx = legIndex
             legIndex += 1
-            if !snapToRoads || d < 60 || idx >= 28 {
+            if !snapToRoads || d < 120 || roadBudget <= 0 {
                 appendLeg(self.curvedSegment(from: from, to: to))
                 step()
                 return
             }
+            roadBudget -= 1
             let request = MKDirections.Request()
             request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
             request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
