@@ -512,8 +512,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 旧版把随机点「随机位置 insert」——线路来回交叉，看起来像 GPS 漂移。
     // 新版规则：
     // ① 固定点保持用户给定次序（必到）；
-    // ② 随机点先按几何位置归到「相邻锚点之间的空档」，再沿空档做就近串联，
-    //    只保留「前两个最近里随机取一个」的轻微随机（有变化但不打结）；
+    // ② 随机点先按几何位置归到「相邻锚点之间的空档」，再按**沿这段路走了多远**定序，
+    //    随机只做**相邻两项互换**（每点最多换一次）—— a、b 两点只可能 ab 或 ba，
+    //    绝不会变成 a→c→d→b 那种跨位乱序（v2.7.8，老总点名）；
     // ③ 多生成几组候选，取「线段交叉最少 → 总里程最短」的一组；
     // ④ 随机跳过只作用于随机点；往返 = 偶数圈反向（去一回一）；
     //    起终点随机互换 = 每次生成随机决定整条线路从哪一头起跑（和"往返"不是一回事）。
@@ -623,30 +624,52 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             buckets[bestGap].append(w)
         }
 
+        // v2.7.8 老总原话：「某一条路只能 ab 能走，随机会导致 acdb / adbc / acdb 这样胡乱搭配，
+        // 只能 ab 或 ba 这样。」⇒ 桶内不再「贪心挑最近的三个」，改成**先定序、只许相邻交换**：
+        // ① 先把桶里的点按「在 anchors[g] → anchors[g+1] 这条线上走了多远」排好 —— 这就是"有序"：
+        //    谁先谁后由它在这条路上的位置决定，不由随机数决定。只有 a、b 两个点时，顺序必然是
+        //    a→b 或 b→a，c、d 再也不可能挤到它们中间去。
+        // ② 随机只允许相邻两项互换，且每个点最多换一次（换完跳过下一位）—— 绝不出现
+        //    a→c→d→b 这种跨位乱序；小折返（人走路本来也会绕一下）由上层「交叉最少/里程最短」兜住。
+        for g in 0..<max(anchors.count - 1, 1) {
+            guard g + 1 < anchors.count, buckets[g].count > 1 else { continue }
+            let a = userWaypoints[anchors[g]]
+            let b = userWaypoints[anchors[g + 1]]
+            buckets[g].sort { projectionT(userWaypoints[$0], a, b) < projectionT(userWaypoints[$1], a, b) }
+        }
+
         var out: [Int] = [anchors[0]]
         for g in 0..<max(anchors.count - 1, 1) {
-            var remain = buckets[g]
-            var cur = anchors[g]
-            while !remain.isEmpty {
-                let ordered = remain.sorted {
-                    distanceBetween(userWaypoints[cur], userWaypoints[$0]) < distanceBetween(userWaypoints[cur], userWaypoints[$1])
+            var seq = buckets[g]
+            if jitter && seq.count > 1 {
+                var i = 0
+                while i + 1 < seq.count {
+                    if Bool.random() {
+                        seq.swapAt(i, i + 1)
+                        i += 2          // 这一对换过了，下一位不再参与，保证每个点最多换一次
+                    } else {
+                        i += 1
+                    }
                 }
-                var pick = 0
-                if jitter && ordered.count > 1 {
-                    // 只在「最近的三个」里随机：最近的最常用，次近次之，第三近偶尔——
-                    // 这样每次生成略有不同，但绝不会跳到远处去（跳远就是「开飞机」）。
-                    let r = Double.random(in: 0..<1)
-                    if r > 0.88 && ordered.count > 2 { pick = 2 }
-                    else if r > 0.66 { pick = 1 }
-                }
-                let next = ordered[pick]
-                out.append(next)
-                remain.removeAll { $0 == next }
-                cur = next
             }
+            out.append(contentsOf: seq)
             if g + 1 < anchors.count { out.append(anchors[g + 1]) }
         }
         return out
+    }
+
+    /// 点在 a→b 线段上的投影参数（0 = 在 a，1 = 在 b，可越界）。
+    /// 只用来给同一段路上的点定"先后"，不做任何截断 —— 截断会让线上游的点并列。
+    private func projectionT(_ p: CLLocationCoordinate2D, _ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(a.latitude * Double.pi / 180)
+        let ax = a.longitude * lonScale, ay = a.latitude * latScale
+        let bx = b.longitude * lonScale, by = b.latitude * latScale
+        let px = p.longitude * lonScale, py = p.latitude * latScale
+        let dx = bx - ax, dy = by - ay
+        let len2 = dx * dx + dy * dy
+        guard len2 > 1e-9 else { return 0 }
+        return ((px - ax) * dx + (py - ay) * dy) / len2
     }
 
     private func pathLength(_ order: [Int]) -> Double {
