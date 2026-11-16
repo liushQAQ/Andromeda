@@ -98,7 +98,10 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var routeMode: RouteMode = .road
     @Published var userWaypoints: [CLLocationCoordinate2D] = []   // 用户点列(GCJ 显示系)，顺序=起→途经→终
     @Published var waypointModes: [Bool] = []                     // 与 userWaypoints 对齐：true=随机(每次洗牌)，false=固定顺序
-    @Published var areaRect: AreaRect? = nil                      // DriftFix v3.0: 自动绕行区域（框选）
+    // DriftFix v3.2: 自动绕行区域改成「手画」——老总实测矩形框选太傻，
+    // 小区/公园/校区基本都不是规整矩形，框大了跑出边界，框小了漏掉一半。
+    // 存多边形顶点（GCJ 显示系，首尾不重复、顺序闭合），外接矩形只用于切车道方向。
+    @Published var areaPolygon: [CLLocationCoordinate2D]? = nil
     @Published var areaTargetKm: Double = 5.0                     // DriftFix v3.0: 目标里程（公里）
     @Published var visitSequenceText: String = ""                 // 本次实际访问顺序（起→#3→#1→终）
     @Published var estimatedMeters: Double = 0                    // DriftFix v2.6: 预估总里程（米）
@@ -302,7 +305,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     // MARK: - DriftFix v3.0 区域内自动绕行
-    // 老总需求：只给起点和终点 + 框一块大区域 + 目标公里数；中间怎么走自动决定，
+    // 老总需求：只给起点和终点 + 画一块大区域 + 目标公里数；中间怎么走自动决定，
     // 走满公里数才停，不够就在区域内继续绕；尽量走地图已有的道路、不来回交叉。
     // 做法：区域按长边切成等距「车道」，蛇形（弓字形）串起来——天然不交叉；
     // 每段锚点交给 MKDirections 步行算路贴街道，失败/绕太远则自然弯兜底。
@@ -337,6 +340,51 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         var summaryText: String {
             String(format: "%.2f × %.2f km", widthMeters / 1000, heightMeters / 1000)
+        }
+
+        /// DriftFix v3.2: 由手画多边形取外接矩形
+        static func bounding(of poly: [CLLocationCoordinate2D]) -> AreaRect? {
+            guard poly.count >= 3 else { return nil }
+            let lats = poly.map { $0.latitude }
+            let lons = poly.map { $0.longitude }
+            guard let s = lats.min(), let n = lats.max(),
+                  let w = lons.min(), let e = lons.max() else { return nil }
+            return AreaRect(south: s, west: w, north: n, east: e)
+        }
+    }
+
+    /// 手画区域的外接矩形（只用于选车道方向/判尺寸；蛇形点由多边形裁出来）
+    var areaRect: AreaRect? {
+        guard let poly = areaPolygon else { return nil }
+        return AreaRect.bounding(of: poly)
+    }
+
+    /// 多边形面积（平方米，Shoelace + 米制投影）
+    static func polygonAreaM2(_ poly: [CLLocationCoordinate2D]) -> Double {
+        guard poly.count >= 3 else { return 0 }
+        let lat0 = poly.reduce(0.0) { $0 + $1.latitude } / Double(poly.count)
+        let latScale = 111320.0
+        let lonScale = 111320.0 * cos(lat0 * Double.pi / 180)
+        guard lonScale > 1 else { return 0 }
+        var sum = 0.0
+        for i in 0..<poly.count {
+            let a = poly[i]
+            let b = poly[(i + 1) % poly.count]
+            let ax = a.longitude * lonScale, ay = a.latitude * latScale
+            let bx = b.longitude * lonScale, by = b.latitude * latScale
+            sum += ax * by - bx * ay
+        }
+        return abs(sum) / 2
+    }
+
+    /// 多边形绕质心缩放
+    private static func scalePolygon(_ poly: [CLLocationCoordinate2D], by k: Double) -> [CLLocationCoordinate2D] {
+        guard !poly.isEmpty else { return poly }
+        let cLat = poly.reduce(0.0) { $0 + $1.latitude } / Double(poly.count)
+        let cLon = poly.reduce(0.0) { $0 + $1.longitude } / Double(poly.count)
+        return poly.map {
+            CLLocationCoordinate2D(latitude: cLat + ($0.latitude - cLat) * k,
+                                   longitude: cLon + ($0.longitude - cLon) * k)
         }
     }
 
@@ -1049,7 +1097,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         runLeg(0)
     }
     
-    // MARK: - DriftFix v3.0 区域自动绕行（框选区域 → 蛇形覆盖 → 走满目标公里数 → 回到终点）
+    // MARK: - DriftFix v3.2 区域自动绕行（手画多边形 → 扫描线蛇形 → 走满目标公里数 → 回到终点）
 
     private struct AreaPlan {
         var spacing: Double
@@ -1094,69 +1142,103 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return AreaPlan(spacing: spacing, laps: laps)
     }
 
-    /// 区域蛇形锚点：沿长边切车道，奇偶行反向，端到端相连——几何上不会交叉。
-    /// 每 ≈350m 放一个锚点，交给步行导航贴街道用。
-    private func areaSerpentine(rect: AreaRect, spacing: Double, startFrom: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
-        let c = rect.center
+    /// 多边形蛇形锚点（DriftFix v3.2，替代按矩形切车道）：
+    /// 沿一个方向逐条扫描线切开手画区域，扫描线与多边形边的交点两两配对得到「内部区间」，
+    /// 区间内每 ≈350m 一个锚点，奇偶行反向。天然只在画出来的形状里走、不来回交叉；
+    /// 凹形（L 形 / 月牙）区域一条扫描线会有多段，按行依次串起来照样走满。
+    /// 扫描方向自动选：南北明显更长时改按经度扫，否则细长区域会切成梳子状来回拐。
+    private func areaSerpentine(polygon: [CLLocationCoordinate2D],
+                                spacing: Double,
+                                startFrom: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
+        guard polygon.count >= 3 else { return [] }
+        let lats = polygon.map { $0.latitude }
+        let lons = polygon.map { $0.longitude }
+        guard let latMin = lats.min(), let latMax = lats.max(),
+              let lonMin = lons.min(), let lonMax = lons.max() else { return [] }
         let latScale = 111320.0
-        let lonScale = 111320.0 * cos(c.latitude * Double.pi / 180)
+        let lonScale = 111320.0 * cos((latMin + latMax) / 2 * Double.pi / 180)
         guard lonScale > 1 else { return [] }
-        let halfW = rect.widthMeters / 2 * 0.92
-        let halfH = rect.heightMeters / 2 * 0.92
-        let useEW = rect.widthMeters >= rect.heightMeters
-        let laneHalf = useEW ? halfW : halfH
-        let stepHalf = useEW ? halfH : halfW
-        guard laneHalf > 40, stepHalf > 40 else { return [] }
+        let widthM = (lonMax - lonMin) * lonScale
+        let heightM = (latMax - latMin) * latScale
+        guard widthM > 60, heightM > 60 else { return [] }
+        let scanLat = heightM <= widthM * 1.6
 
-        let n = max(2, min(40, Int((stepHalf * 2) / max(spacing, 40)) + 1))
-        let perLane = max(1, Int((laneHalf * 2) / 350.0))
-        var pts: [CLLocationCoordinate2D] = []
-        for i in 0..<n {
-            let t = n > 1 ? Double(i) / Double(n - 1) : 0
-            let v = -stepHalf + stepHalf * 2 * t
+        // 统一到 (u=横向, v=扫描推进方向) 米制平面，算完再映射回经纬度
+        func uv(_ c: CLLocationCoordinate2D) -> (u: Double, v: Double) {
+            let x = c.longitude * lonScale, y = c.latitude * latScale
+            return scanLat ? (x, y) : (y, x)
+        }
+        func coord(_ u: Double, _ v: Double) -> CLLocationCoordinate2D {
+            if scanLat {
+                return CLLocationCoordinate2D(latitude: v / latScale, longitude: u / lonScale)
+            }
+            return CLLocationCoordinate2D(latitude: u / latScale, longitude: v / lonScale)
+        }
+
+        let flat = polygon.map { uv($0) }
+        guard flat.count >= 3, let vMin = flat.map({ $0.v }).min(), let vMax = flat.map({ $0.v }).max() else { return [] }
+        let vSpan = vMax - vMin
+        guard vSpan > 100 else { return [] }
+
+        let stepM = max(60.0, min(spacing, 400.0))
+        let rows = max(2, min(40, Int(vSpan / stepM) + 1))
+        let realStep = vSpan / Double(rows - 1)
+
+        var out: [CLLocationCoordinate2D] = []
+        for i in 0..<rows {
+            let v = vMin + realStep * Double(i)
+            // 扫描线与每条边的交点（半开区间判定，正好落在顶点时只算一次）
+            var xs: [Double] = []
+            for k in 0..<flat.count {
+                let a = flat[k], b = flat[(k + 1) % flat.count]
+                if (a.v <= v && b.v > v) || (b.v <= v && a.v > v) {
+                    let t = (v - a.v) / (b.v - a.v)
+                    xs.append(a.u + (b.u - a.u) * t)
+                }
+            }
+            xs.sort()
+            guard xs.count >= 2 else { continue }
+            var spans: [(Double, Double)] = []
+            var j = 0
+            while j + 1 < xs.count {
+                if xs[j + 1] > xs[j] { spans.append((xs[j], xs[j + 1])) }
+                j += 2
+            }
+            guard !spans.isEmpty else { continue }
             let forward = i % 2 == 0
-            let fromX = useEW ? (forward ? -laneHalf : laneHalf) : v
-            let fromY = useEW ? v : (forward ? -laneHalf : laneHalf)
-            let toX = useEW ? (forward ? laneHalf : -laneHalf) : v
-            let toY = useEW ? v : (forward ? laneHalf : -laneHalf)
-            for j in 0...perLane {
-                let f = Double(j) / Double(perLane)
-                let x = fromX + (toX - fromX) * f
-                let y = fromY + (toY - fromY) * f
-                pts.append(CLLocationCoordinate2D(latitude: c.latitude + y / latScale,
-                                                  longitude: c.longitude + x / lonScale))
+            let ordered: [(Double, Double)] = forward ? spans : Array(spans.reversed())
+            for sp in ordered {
+                let lo = forward ? sp.0 : sp.1
+                let hi = forward ? sp.1 : sp.0
+                guard abs(hi - lo) > 30 else { continue }
+                let n = max(1, Int(abs(hi - lo) / 350.0))
+                for m in 0...n {
+                    let f = Double(m) / Double(n)
+                    out.append(coord(lo + (hi - lo) * f, v))
+                }
             }
         }
-        if let first = pts.first, let last = pts.last,
+        if let first = out.first, let last = out.last,
            distanceBetween(first, startFrom) > distanceBetween(last, startFrom) {
-            pts.reverse()
+            out.reverse()
         }
-        return pts
+        return out
     }
 
-    /// 区域比目标里程大太多时，只在区域中心取一块子区域来绕——
-    /// 否则「5km 见方 + 5km 目标」会被迫走出 15km（蛇形最少也要两条满宽车道）。
-    /// 车道总长约等于 面积 ÷ 车道间距，所以按 sqrt 比例缩小，迭代几次收敛。
-    private func fitAreaRect(_ rect: AreaRect, targetMeters: Double) -> AreaRect {
-        let want = targetMeters * 1.15
-        let c = rect.center
-        var scale = 1.0
-        var result = rect
+    /// 手画区域比目标里程大太多时，绕质心等比缩小——
+    /// 蛇形总长 ≈ 多边形面积 ÷ 车道间距，所以按 sqrt 比例缩，迭代几次收敛。
+    private func fitAreaPolygon(_ polygon: [CLLocationCoordinate2D], targetMeters: Double) -> [CLLocationCoordinate2D] {
+        guard polygon.count >= 3 else { return polygon }
+        let spacing = 150.0
+        let wantArea = targetMeters * 1.15 * spacing
+        var result = polygon
         for _ in 0..<5 {
-            let laneSpan = max(result.widthMeters, result.heightMeters) * 0.92
-            let stepSpan = min(result.widthMeters, result.heightMeters) * 0.92
-            let lanes = max(2, min(40, Int(stepSpan / 150.0) + 1))
-            let capacity = Double(lanes) * laneSpan + stepSpan + laneSpan * 0.35
-            if capacity <= want * 1.25 { break }
-            let next = max(0.05, min(0.98, scale * sqrt(want / capacity)))
-            if abs(next - scale) < 0.03 { break }
-            scale = next
-            let candidate = AreaRect(south: c.latitude - (c.latitude - rect.south) * scale,
-                                     west: c.longitude - (c.longitude - rect.west) * scale,
-                                     north: c.latitude + (rect.north - c.latitude) * scale,
-                                     east: c.longitude + (rect.east - c.longitude) * scale)
-            if candidate.widthMeters < 160 || candidate.heightMeters < 160 { break }
-            result = candidate
+            let area = Self.polygonAreaM2(result)
+            if area <= wantArea * 1.3 { break }
+            let k = max(0.08, min(0.98, sqrt(wantArea / area)))
+            let next = Self.scalePolygon(result, by: k)
+            if let b = AreaRect.bounding(of: next), b.widthMeters < 160 || b.heightMeters < 160 { break }
+            result = next
         }
         return result
     }
@@ -1165,15 +1247,21 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 2.2 倍绕远），拿不到就自然弯兜底；全程平滑 + 变速 1Hz 重采样。
     func buildAreaRoute(start: CLLocationCoordinate2D,
                         end: CLLocationCoordinate2D,
-                        rect: AreaRect,
+                        polygon: [CLLocationCoordinate2D],
                         targetMeters: Double,
                         minSpeed: Double,
                         maxSpeed: Double,
                         snapToRoads: Bool,
                         completion: @escaping (Bool, String?) -> Void) {
-        guard rect.isValid else { completion(false, "请先在地图上框选一块区域"); return }
-        guard rect.widthMeters >= 150, rect.heightMeters >= 150 else {
-            completion(false, "区域太小：至少框 150 米见方")
+        guard polygon.count >= 3 else { completion(false, "请先在地图上画一块要绕行的区域"); return }
+        let areaM2 = Self.polygonAreaM2(polygon)
+        guard areaM2 >= 40000 else {
+            completion(false, "手画区域太小：面积至少 4 万平方米（约 200 米见方）")
+            return
+        }
+        guard let bounds = AreaRect.bounding(of: polygon),
+              bounds.widthMeters >= 150, bounds.heightMeters >= 150 else {
+            completion(false, "手画区域太窄：长和宽至少各 150 米")
             return
         }
         let target = max(targetMeters, 500)
@@ -1182,12 +1270,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         allRoutePolylines = []
         selectedRouteIndex = 0
 
-        let area = fitAreaRect(rect, targetMeters: target)
-        let plan = planArea(rect: area, targetMeters: target)
+        let area = fitAreaPolygon(polygon, targetMeters: target)
+        let plan = planArea(rect: AreaRect.bounding(of: area) ?? bounds, targetMeters: target)
         var anchors: [CLLocationCoordinate2D] = [start]
         var cursor = start
         for _ in 0..<plan.laps {
-            let lanes = areaSerpentine(rect: area, spacing: plan.spacing, startFrom: cursor)
+            let lanes = areaSerpentine(polygon: area, spacing: plan.spacing, startFrom: cursor)
             if lanes.count < 2 { break }
             anchors.append(contentsOf: lanes)
             cursor = lanes[lanes.count - 1]
@@ -1246,7 +1334,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                 self.estimatedMeters = meters
                 self.estimatedSteps = Int(meters / self.strideForEstimate)
                 if meters < target * 0.95 {
-                    completion(true, "区域内只走出 \(Int(meters)) 米，没到目标；把区域框大一点再生成一次")
+                    completion(true, "区域内只走出 \(Int(meters)) 米，没到目标；把手画区域画大一点再生成一次")
                 } else {
                     completion(true, nil)
                 }
@@ -1456,11 +1544,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         var waypoints: [[Double]] = []      // 用户点列（GCJ 显示系，含起终点）
         var waypointModes: [Bool] = []
         // DriftFix v3.0: 区域自动绕行（可选，老存档解出来是 nil）
+        // v3.2 起区域是手画多边形，顶点序列存这里；四个 area* 边界字段只用于兼容旧存档
         var areaSouth: Double? = nil
         var areaWest: Double? = nil
         var areaNorth: Double? = nil
         var areaEast: Double? = nil
         var areaTargetKm: Double? = nil
+        var areaPolygon: [[Double]]? = nil
     }
 
     struct RouteLoadResult {
@@ -1567,8 +1657,16 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             travelMode = TravelMode(rawValue: m.travelMode) ?? travelMode
             speedMinMps = m.speedMinKmh / 3.6
             speedMaxMps = m.speedMaxKmh / 3.6
-            if let s = m.areaSouth, let w = m.areaWest, let n = m.areaNorth, let e = m.areaEast {
-                areaRect = AreaRect(south: s, west: w, north: n, east: e)
+            if let poly = m.areaPolygon, poly.count >= 3 {
+                let verts = poly.compactMap { $0.count >= 2
+                    ? CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1]) : nil }
+                if verts.count >= 3 { areaPolygon = verts }
+            } else if let s = m.areaSouth, let w = m.areaWest, let n = m.areaNorth, let e = m.areaEast {
+                // 旧存档只有矩形：还原成矩形四角多边形
+                areaPolygon = [CLLocationCoordinate2D(latitude: s, longitude: w),
+                               CLLocationCoordinate2D(latitude: s, longitude: e),
+                               CLLocationCoordinate2D(latitude: n, longitude: e),
+                               CLLocationCoordinate2D(latitude: n, longitude: w)]
             }
             if let t = m.areaTargetKm { areaTargetKm = t }
         }
