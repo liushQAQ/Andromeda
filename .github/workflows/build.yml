@@ -74,7 +74,7 @@ jobs:
           ])
           data = {
               "version": "2.7.3-freetrack",
-              "build": 17,
+              "build": 18,
               "title": "自由轨迹 v2.7.3（手画区域）",
               "changelog": changelog,
               "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.3-freetrack/Geranium-2.7.3-freetrack.tipa",
