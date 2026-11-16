@@ -1,4 +1,4 @@
-name: "自由轨迹 TIPA v2.7.9"
+name: "自由轨迹 TIPA v2.7.10"
 
 on:
   push:
@@ -34,8 +34,8 @@ jobs:
           BLD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST")
           echo "name=$NAME ver=$VER build=$BLD"
           test "$NAME" = "自由轨迹" || { echo "构建产物应用名被构建设置覆盖，实际=$NAME"; exit 1; }
-          test "$VER" = "2.7.9-freetrack" || { echo "版本号不符，实际=$VER"; exit 1; }
-          test "$BLD" = "24" || { echo "构建号不符，实际=$BLD"; exit 1; }
+          test "$VER" = "2.7.10-freetrack" || { echo "版本号不符，实际=$VER"; exit 1; }
+          test "$BLD" = "25" || { echo "构建号不符，实际=$BLD"; exit 1; }
 
       - name: Assemble TIPA（免签 + ldid entitlements + RootHelper）
         run: |
@@ -56,31 +56,31 @@ jobs:
           cp -R Geranium.app Payload/Geranium.app
           zip -qry Geranium.tipa Payload
           cd ..
-          cp build/Geranium.tipa "Geranium-2.7.9-freetrack.tipa"
-          shasum -a 256 "Geranium-2.7.9-freetrack.tipa" | tee sha256.txt
-          ls -la "Geranium-2.7.9-freetrack.tipa"
+          cp build/Geranium.tipa "Geranium-2.7.10-freetrack.tipa"
+          shasum -a 256 "Geranium-2.7.10-freetrack.tipa" | tee sha256.txt
+          ls -la "Geranium-2.7.10-freetrack.tipa"
 
       - name: Generate latest.json（云端更新检测元数据）
         run: |
           python3 - <<'PY'
           import io, json
           changelog = "\n".join([
-              "1. 手画线路可以换画笔，绿笔固定、橙笔随机。",
-              "2. 绿笔画的路一分不差，橙笔只在小范围浮动。",
-              "3. 橙色那几段转成点后还能参与顺序打乱。",
-              "4. 固定段和随机段能画在同一条线上，互不影响。",
-              "5. 上次画的笔画继续保留，换笔也能接着改。",
-              "6. 其他功能没变，已保存的线路还能接着用。",
+              "1. 轨迹加了真机那种轻微晃动，看着更像真人跑。",
+              "2. 地图上画的线没变，走的还是你画的那条路。",
+              "3. 偶尔像进树荫，定位精度会变差几秒再恢复。",
+              "4. 手画双画笔照旧：绿笔固定、橙笔随机。",
+              "5. 保存的线路和设置都保留，不用重新配置。",
+              "6. 其他功能没变，用法和上一版一样。",
           ])
           data = {
-              "version": "2.7.9-freetrack",
-              "build": 24,
-              "title": "自由轨迹 v2.7.9（手画双画笔：固定 / 随机）",
+              "version": "2.7.10-freetrack",
+              "build": 25,
+              "title": "自由轨迹 v2.7.10（轨迹拟真：更像真机记录）",
               "changelog": changelog,
-              "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.9-freetrack/Geranium-2.7.9-freetrack.tipa",
+              "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.10-freetrack/Geranium-2.7.10-freetrack.tipa",
               "tipa_mirrors": [
-                  "https://ghfast.top/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.9-freetrack/Geranium-2.7.9-freetrack.tipa",
-                  "https://gh-proxy.com/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.9-freetrack/Geranium-2.7.9-freetrack.tipa",
+                  "https://ghfast.top/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.10-freetrack/Geranium-2.7.10-freetrack.tipa",
+                  "https://gh-proxy.com/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.10-freetrack/Geranium-2.7.10-freetrack.tipa",
               ],
               "min_ios": "15.0",
           }
@@ -94,7 +94,7 @@ jobs:
         with:
           name: FreeTrack-TIPA
           path: |
-            Geranium-2.7.9-freetrack.tipa
+            Geranium-2.7.10-freetrack.tipa
             latest.json
             sha256.txt
           if-no-files-found: error
@@ -102,20 +102,20 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.7.9-freetrack
-          name: "自由轨迹 2.7.9（手画双画笔：固定 / 随机）"
+          tag_name: v2.7.10-freetrack
+          name: "自由轨迹 2.7.10（轨迹拟真：更像真机记录）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
-            1. 手画时多了两种画笔：绿色固定、橙色随机。
-            2. 绿笔画成什么样就走什么样，坐标不偏移。
-            3. 橙笔只沿画线左右小幅摆动，不会跑到别处。
-            4. 橙笔那几段转成点序列后，还能参与顺序打乱。
-            5. 同一条线可以一段固定一段随机，分区生效。
-            6. 其他功能没变，已保存的线路还能接着用。
+            1. 轨迹加了真机那种轻微晃动，看着更像真人跑。
+            2. 地图上画的线没变，走的还是你画的那条路。
+            3. 偶尔像进树荫，定位精度会变差几秒再恢复。
+            4. 手画双画笔照旧：绿笔固定、橙笔随机。
+            5. 保存的线路和设置都保留，不用重新配置。
+            6. 其他功能没变，用法和上一版一样。
             步数插件仍单独安装，不与本 App 打包在一起。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
-            Geranium-2.7.9-freetrack.tipa
+            Geranium-2.7.10-freetrack.tipa
             latest.json
             sha256.txt
         env:
