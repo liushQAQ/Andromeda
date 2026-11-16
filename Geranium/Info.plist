@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.7.3-freetrack</string>
+	<string>2.7.4-freetrack</string>
 	<key>CFBundleVersion</key>
-	<string>17</string>
+	<string>19</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>apple-magnifier</string>

@@ -725,10 +725,10 @@ struct RouteSimSheet: View {
     private func areaSummary(_ poly: [CLLocationCoordinate2D]) -> String {
         let a = RouteSimulator.polygonAreaM2(poly)
         if let b = RouteSimulator.AreaRect.bounding(of: poly) {
-            return String(format: "%.2f km² · %.1f×%.1f km", a / 1_000_000,
-                          b.widthMeters / 1000, b.heightMeters / 1000)
+            return String(format: "%@ · %.0f×%.0f 米", RouteSimulator.areaText(a),
+                          b.widthMeters, b.heightMeters)
         }
-        return String(format: "%.2f km²", a / 1_000_000)
+        return RouteSimulator.areaText(a)
     }
 
     private var areaSection: some View {
@@ -866,9 +866,11 @@ struct RouteSimSheet: View {
             .padding(.horizontal, 12)
 
             if let poly = areaDraftPolygon {
-                Text(areaSummary(poly))
+                let enough = RouteSimulator.polygonAreaM2(poly) >= RouteSimulator.minAreaM2
+                Text(enough ? areaSummary(poly)
+                            : "还差一点：现在是 \(areaSummary(poly))，至少要 \(RouteSimulator.areaText(RouteSimulator.minAreaM2))，把圈再画大一圈")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(enough ? .secondary : .orange)
                     .padding(.vertical, 8)
             } else {
                 Text("区域里出现起点/终点标记时，会自动把它们显示出来做参考")
@@ -929,9 +931,15 @@ struct RouteSimSheet: View {
     private func commitArea() {
         guard let poly = areaDraftPolygon, poly.count >= 3 else { return }
         let areaM2 = RouteSimulator.polygonAreaM2(poly)
-        guard let b = RouteSimulator.AreaRect.bounding(of: poly),
-              areaM2 >= 40000, b.widthMeters >= 150, b.heightMeters >= 150 else {
-            UIApplication.shared.alert(body: "区域太小：面积至少 4 万平方米（约 200 米见方）。")
+        guard let b = RouteSimulator.AreaRect.bounding(of: poly) else { return }
+        guard areaM2 >= RouteSimulator.minAreaM2 else {
+            UIApplication.shared.alert(body: "画的区域只有 \(RouteSimulator.areaText(areaM2))，至少要 \(RouteSimulator.areaText(RouteSimulator.minAreaM2))。把圈再放大一点重新保存就行。")
+            return
+        }
+        guard b.widthMeters >= RouteSimulator.minSideMeters,
+              b.heightMeters >= RouteSimulator.minSideMeters else {
+            let short = Int(min(b.widthMeters, b.heightMeters))
+            UIApplication.shared.alert(body: "画的区域太窄：最短的一边只有 \(short) 米，至少要 \(Int(RouteSimulator.minSideMeters)) 米。把圈画宽一点再保存。")
             return
         }
         routeSimulator.areaPolygon = poly
@@ -2276,6 +2284,10 @@ struct AreaDrawMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
+        // v2.7.4：每次刷新把最新状态同步给手势处理器。原来只在 makeCoordinator 里存了一份，
+        // 之后切「移动地图 / 手画区域」这个字段永远是首次创建时的值——
+        // 先有区域再重画时画笔被误判为关闭，手指画的圈一点都记不上，保存的仍是上一次的旧圈。
+        context.coordinator.parent = self
         // 手画模式只禁单指拖动（留给画笔），双指缩放保留——画大区域前要先缩小看一眼
         uiView.isScrollEnabled = !selecting
         if let region = moveToRegion {

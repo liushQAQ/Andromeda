@@ -359,19 +359,34 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return AreaRect.bounding(of: poly)
     }
 
+    /// 手画区域的最低可用门槛（v2.7.4 放宽：原来要 4 万 m²=60 亩，几十亩的场地全被拦下）
+    static let minAreaM2: Double = 3000
+    static let minSideMeters: Double = 70
+
+    /// 面积的人话写法（老总按「亩」理解场地大小，页面和报错都用这个口径）
+    static func areaText(_ m2: Double) -> String {
+        if m2 >= 10000 {
+            return String(format: "%.1f 万 m²（约 %.0f 亩）", m2 / 10000, m2 / 666.67)
+        }
+        return String(format: "%.0f m²（约 %.1f 亩）", m2, m2 / 666.67)
+    }
+
     /// 多边形面积（平方米，Shoelace + 米制投影）
     static func polygonAreaM2(_ poly: [CLLocationCoordinate2D]) -> Double {
         guard poly.count >= 3 else { return 0 }
         let lat0 = poly.reduce(0.0) { $0 + $1.latitude } / Double(poly.count)
+        let lon0 = poly.reduce(0.0) { $0 + $1.longitude } / Double(poly.count)
         let latScale = 111320.0
         let lonScale = 111320.0 * cos(lat0 * Double.pi / 180)
         guard lonScale > 1 else { return 0 }
+        // 先平移到质心再套鞋带公式：经度绝对值 ~1e2、乘以米制系数后 ~1e7，
+        // 直接相乘会在 1e14 量级上做差，几十万 m² 的圈能算出 0.x m² 的偏差。
         var sum = 0.0
         for i in 0..<poly.count {
             let a = poly[i]
             let b = poly[(i + 1) % poly.count]
-            let ax = a.longitude * lonScale, ay = a.latitude * latScale
-            let bx = b.longitude * lonScale, by = b.latitude * latScale
+            let ax = (a.longitude - lon0) * lonScale, ay = (a.latitude - lat0) * latScale
+            let bx = (b.longitude - lon0) * lonScale, by = (b.latitude - lat0) * latScale
             sum += ax * by - bx * ay
         }
         return abs(sum) / 2
@@ -1114,7 +1129,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         // 从密到疏扫一遍，取「最稀疏但仍够目标」的那一档——区域大、目标小时不会硬塞几十条车道
         var spacing = 400.0
         var found = false
-        var s = 60.0
+        var s = 45.0
         while s <= 400.0 {
             let n = max(2, min(40, Int(stepLen / s) + 1))
             let realStep = stepLen / Double(n - 1)
@@ -1130,7 +1145,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             let nMax = max(2, min(40, Int(stepLen / 400.0) + 1))
             let realMax = stepLen / Double(nMax - 1)
             let capMax = Double(nMax) * laneLen + Double(nMax - 1) * realMax + laneLen * 0.35
-            spacing = capMax >= targetMeters ? 400.0 : 60.0
+            spacing = capMax >= targetMeters ? 400.0 : 45.0
         }
         let n = max(2, min(40, Int(stepLen / spacing) + 1))
         let realStep = stepLen / Double(n - 1)
@@ -1237,7 +1252,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             if area <= wantArea * 1.3 { break }
             let k = max(0.08, min(0.98, sqrt(wantArea / area)))
             let next = Self.scalePolygon(result, by: k)
-            if let b = AreaRect.bounding(of: next), b.widthMeters < 160 || b.heightMeters < 160 { break }
+            if let b = AreaRect.bounding(of: next), b.widthMeters < 80 || b.heightMeters < 80 { break }
             result = next
         }
         return result
@@ -1255,13 +1270,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                         completion: @escaping (Bool, String?) -> Void) {
         guard polygon.count >= 3 else { completion(false, "请先在地图上画一块要绕行的区域"); return }
         let areaM2 = Self.polygonAreaM2(polygon)
-        guard areaM2 >= 40000 else {
-            completion(false, "手画区域太小：面积至少 4 万平方米（约 200 米见方）")
+        guard areaM2 >= Self.minAreaM2 else {
+            completion(false, "画的区域只有 \(Self.areaText(areaM2))，至少要 \(Self.areaText(Self.minAreaM2))。把圈再放大一点重新保存就行。")
             return
         }
         guard let bounds = AreaRect.bounding(of: polygon),
-              bounds.widthMeters >= 150, bounds.heightMeters >= 150 else {
-            completion(false, "手画区域太窄：长和宽至少各 150 米")
+              bounds.widthMeters >= Self.minSideMeters, bounds.heightMeters >= Self.minSideMeters else {
+            completion(false, "画的区域太窄（最短的一边不到 \(Int(Self.minSideMeters)) 米），绕不开车道。把圈画宽一点再保存。")
             return
         }
         let target = max(targetMeters, 500)
