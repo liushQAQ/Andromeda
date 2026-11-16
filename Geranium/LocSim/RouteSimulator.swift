@@ -113,6 +113,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var estimatedSteps: Int = 0                        // DriftFix v2.6: 预估步数 = 里程 ÷ 步幅
     // DriftFix v2.9: 手画笔画常驻（存在这里而不是 View 的 @State，关掉面板/退出 App 都不丢）
     @Published var drawnStrokes: [[CLLocationCoordinate2D]] = []
+    // v2.7.9 画笔模式（与 drawnStrokes 一 一 对齐）：0=固定（坐标严格照画线，一分不差）；1=随机（沿画线小幅摆动，转成点序列后参与顺序打乱）
+    // 老总原话：「更换画笔，画笔样式或者颜色不同，来指定某段区域固定，不随机。」
+    @Published var drawnStrokeModes: [Int] = []
 
     private var routePoints: [CLLocationCoordinate2D] = []
     private var timer: Timer? = nil
@@ -868,6 +871,123 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         return clampToPolyline(smoothed, reference: points, maxOffset: 2.0)
     }
 
+    /// DriftFix v2.7.9 多画笔手画：固定笔严格照画线（零偏移），随机笔沿画线走但横向最多偏 2.2 米。
+    /// 老总原话：「更换画笔，画笔样式或者颜色不同，来指定某段区域固定，不随机。」
+    /// 只有随机笔才产生偏移，固定笔的点原样进入注入序列——分区控制，不做全局抖动。
+    func buildFromDrawnStrokes(_ strokes: [[CLLocationCoordinate2D]], modes: [Int],
+                               minSpeed: Double, maxSpeed: Double) -> Bool {
+        var flat: [CLLocationCoordinate2D] = []
+        var wildFlags: [Bool] = []
+        for (i, s) in strokes.enumerated() {
+            let wild = i < modes.count && modes[i] == 1
+            for c in s { flat.append(c); wildFlags.append(wild) }
+        }
+        guard flat.count >= 2 else { return false }
+
+        // 1.5m 去重，模式跟着走（合并时「只要沾了随机笔就算随机」）
+        var pts: [CLLocationCoordinate2D] = [flat[0]]
+        var flags: [Bool] = [wildFlags[0]]
+        for i in 1..<flat.count {
+            if let last = pts.last, distanceBetween(last, flat[i]) < 1.5 {
+                if wildFlags[i] { flags[flags.count - 1] = true }
+                continue
+            }
+            pts.append(flat[i])
+            flags.append(wildFlags[i])
+        }
+        if let lastP = flat.last, let lastOut = pts.last, distanceBetween(lastOut, lastP) > 0.5 {
+            pts.append(lastP)
+            flags.append(wildFlags.last ?? false)
+        }
+        guard pts.count >= 2 else { return false }
+        let base = pts
+        let resampled = interpolateVariableRoute(coords: base, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
+        let injected = applyRandomBrushSway(resampled, reference: base, wild: flags)
+
+        polylineIsWGS = false
+        routePoints = injected.count >= 2 ? injected : base
+        totalPoints = routePoints.count
+        currentPointIndex = 0
+        progress = 0.0
+        isSimulating = false
+        isPaused = false
+        currentPosition = nil
+        availableRoutes = []
+        allRoutePolylines = []
+        routePolyline = MKPolyline(coordinates: base, count: base.count)
+        var totalMeters: Double = 0
+        for i in 1..<base.count {
+            totalMeters += distanceBetween(base[i - 1], base[i])
+        }
+        let eff = max((minSpeed + maxSpeed) / 2, 0.2)
+        let secs = totalMeters / eff
+        let m = Int(secs) / 60
+        estimatedTime = m > 60 ? "\(m/60)h \(m%60)m" : "\(m)m \(Int(secs) % 60)s"
+        estimatedMeters = totalMeters
+        estimatedSteps = Int(totalMeters / strideForEstimate)
+        return true
+    }
+
+    /// 随机笔画的横向摆动：偏移量只与「沿路走了多远」有关，所以是连续的，不会一顿一跳；
+    /// 权重在随机段与固定段交界处按 8 拍平滑，接缝不出现突跳。固定段权重恒 0 ⇒ 像素级照画线。
+    private func applyRandomBrushSway(_ pts: [CLLocationCoordinate2D],
+                                      reference: [CLLocationCoordinate2D],
+                                      wild: [Bool]) -> [CLLocationCoordinate2D] {
+        guard pts.count >= 3, reference.count >= 2, wild.count == reference.count else { return pts }
+        guard wild.contains(true) else { return pts }   // 全是固定笔：一个坐标都不动
+
+        // 重采样点本来就沿参考折线前进 ⇒ 用单调指针找最近点，O(n+m)，不在这里做全量比距离
+        var raw = [Double](repeating: 0, count: pts.count)
+        var j = 0
+        for i in 0..<pts.count {
+            var bestJ = j
+            var bestD = distanceBetween(pts[i], reference[j])
+            var k = j
+            while k + 1 < reference.count {
+                let dNext = distanceBetween(pts[i], reference[k + 1])
+                if dNext <= bestD {
+                    bestD = dNext
+                    bestJ = k + 1
+                    k += 1
+                } else {
+                    break
+                }
+            }
+            j = bestJ
+            raw[i] = wild[bestJ] ? 1.0 : 0.0
+        }
+        // 8 拍滑动平均：随机/固定交界柔化
+        let radius = 8
+        let weight: [Double] = (0..<pts.count).map { i in
+            let lo = max(0, i - radius)
+            let hi = min(pts.count - 1, i + radius)
+            var sum = 0.0
+            for k in lo...hi { sum += raw[k] }
+            return sum / Double(hi - lo + 1)
+        }
+
+        var out = pts
+        var traveled = 0.0
+        for i in 1..<pts.count {
+            traveled += distanceBetween(pts[i - 1], pts[i])
+            guard weight[i] > 0.01 else { continue }
+            let a = pts[max(0, i - 1)]
+            let b = pts[min(pts.count - 1, i + 1)]
+            let bearing = bearing(from: a, to: b) * Double.pi / 180.0
+            // 两个不同波长叠一起，看起来像人贴着线走而不是机器正弦
+            let wob = sin(2 * Double.pi * traveled / 43.0) * 0.65
+                    + sin(2 * Double.pi * traveled / 101.0 + 1.7) * 0.35
+            let offset = 2.2 * wob * weight[i]
+            let perp = bearing + Double.pi / 2
+            let dLat = offset * cos(perp)
+            let dLon = offset * sin(perp)
+            let lat = pts[i].latitude + dLat / 111_320.0
+            let lon = pts[i].longitude + dLon / (111_320.0 * max(cos(pts[i].latitude * Double.pi / 180.0), 0.2))
+            out[i] = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+        return out
+    }
+
     /// 手画原始点去重（1.5m 内视为同一点）：不简化、不平滑，保证走线 = 画线。
     private func dedupeDrawnPoints(_ pts: [CLLocationCoordinate2D], minMeters: Double) -> [CLLocationCoordinate2D] {
         guard pts.count >= 2 else { return pts }
@@ -1046,25 +1166,52 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func persistDrawnStrokes() {
         let raw: [[[Double]]] = drawnStrokes.map { $0.map { [$0.latitude, $0.longitude] } }
-        guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
+        // v2.7.9: 画笔模式一起存；老版本文件是纯数组，restore 时按「全部固定」读回
+        let payload: [String: Any] = ["v": 2, "strokes": raw, "modes": normalizedStrokeModes(count: drawnStrokes.count)]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         try? data.write(to: Self.drawnStrokesURL(), options: .atomic)
     }
 
     func restoreDrawnStrokes() {
         guard let data = try? Data(contentsOf: Self.drawnStrokesURL()),
-              let obj = try? JSONSerialization.jsonObject(with: data),
-              let raw = obj as? [[[Double]]] else { return }
+              let obj = try? JSONSerialization.jsonObject(with: data) else { return }
+        var raw: [[[Double]]] = []
+        var modes: [Int] = []
+        if let arr = obj as? [[[Double]]] {
+            raw = arr
+        } else if let dict = obj as? [String: Any], let arr = dict["strokes"] as? [[[Double]]] {
+            raw = arr
+            if let m = dict["modes"] as? [Int] { modes = m }
+        } else {
+            return
+        }
         let strokes: [[CLLocationCoordinate2D]] = raw.map { stroke in
             stroke.compactMap { pair in
                 guard pair.count >= 2 else { return nil }
                 return CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
             }
         }
-        if !strokes.isEmpty { drawnStrokes = strokes }
+        if !strokes.isEmpty {
+            drawnStrokes = strokes
+            drawnStrokeModes = normalizeModeArray(modes, count: strokes.count)
+        }
+    }
+
+    /// 画笔模式补齐/截断到与笔画数一致（缺的按「固定」处理）
+    func normalizedStrokeModes(count: Int) -> [Int] {
+        normalizeModeArray(drawnStrokeModes, count: count)
+    }
+
+    private func normalizeModeArray(_ src: [Int], count: Int) -> [Int] {
+        guard count > 0 else { return [] }
+        var out = Array(src.prefix(count))
+        if out.count < count { out.append(contentsOf: [Int](repeating: 0, count: count - out.count)) }
+        return out.map { $0 == 1 ? 1 : 0 }
     }
 
     func clearDrawnStrokes() {
         drawnStrokes = []
+        drawnStrokeModes = []
         try? FileManager.default.removeItem(at: Self.drawnStrokesURL())
     }
 
@@ -1079,7 +1226,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 手画线路 → 点序列：把简化后的关键节点写入 userWaypoints，
     /// 这样画完还能在「点序列」里逐点删除/改顺序/中间补点，不用整条重画。
     @discardableResult
-    func adoptDrawnAsWaypoints(points: [CLLocationCoordinate2D], maxPoints: Int = 40) -> Int {
+    func adoptDrawnAsWaypoints(points: [CLLocationCoordinate2D],
+                               wildSource: [CLLocationCoordinate2D] = [],
+                               maxPoints: Int = 40) -> Int {
         guard points.count >= 2 else { return 0 }
         var picked = simplifyPolyline(points, epsilon: 8.0)
         if picked.count > maxPoints {
@@ -1092,7 +1241,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             picked = thinned
         }
         userWaypoints = picked
-        waypointModes = [Bool](repeating: false, count: picked.count)
+        // v2.7.9: 落在「随机」画笔那几笔上的点，转成点序列后自动带随机标记（起终点由 normalizeModes 强制固定）
+        if wildSource.isEmpty {
+            waypointModes = [Bool](repeating: false, count: picked.count)
+        } else {
+            waypointModes = picked.map { p in wildSource.contains { distanceBetween(p, $0) <= 8.0 } }
+        }
         normalizeModes()
         return picked.count
     }

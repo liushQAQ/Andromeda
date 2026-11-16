@@ -76,6 +76,9 @@ struct RouteSimSheet: View {
     @State private var drawPreviewOn: Bool = false
     @State private var drawMode: Int = 1          // 0=移动地图 1=画笔绘制 2=修改线路
     @State private var drawStrokes: [[CLLocationCoordinate2D]] = []
+    // v2.7.9 多画笔：每一笔一个模式（0=固定 1=随机），brushMode 是当前选中的画笔
+    @State private var strokeModes: [Int] = []
+    @State private var brushMode: Int = 0
     @State private var showGPXPicker: Bool = false
     @AppStorage("andromedaSavedSort") private var savedSortRaw: String = RouteSimulator.SavedSort.dateDesc.rawValue
     @State private var savedRoutes: [RouteSimulator.SavedRouteInfo] = []
@@ -338,6 +341,7 @@ struct RouteSimSheet: View {
                 refreshSavedRoutes()
                 routeSimulator.restoreDrawnStrokes()
                 if drawStrokes.isEmpty { drawStrokes = routeSimulator.drawnStrokes }
+                strokeModes = routeSimulator.normalizedStrokeModes(count: drawStrokes.count)
             }
             .sheet(item: $shareItem) { item in
                 ActivityShareSheet(items: [item.url])
@@ -541,7 +545,7 @@ struct RouteSimSheet: View {
                 Spacer()
             }
             .padding(.horizontal)
-            Text("点「生成路线」进入手画地图：先用「移动地图」定位，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放）。你画成什么样，模拟就走什么样（不再自动简化、不会削拐角）。画完可切「修改线路」长按拖动改点、轻点删点，不用整条重画。笔画会自动保存，关掉再进来能接着改。")
+            Text("点「生成路线」进入手画地图：先用「移动地图」定位，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放）。画的时候可以换画笔：绿笔画「固定」段，走起来和画的一分不差；橙笔画「随机」段，只在画的线附近小幅摆动，转成点序列后还能参与顺序打乱。画完可切「修改线路」长按拖动改点、轻点删点，不用整条重画。笔画会自动保存，关掉再进来能接着改。")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -1111,8 +1115,44 @@ struct RouteSimSheet: View {
 
     /// 画笔改动落到 RouteSimulator 并存盘（关面板/退出 App 都不丢）
     private func syncDrawStrokes() {
+        strokeModes = normalizedStrokeModes(count: drawStrokes.count)
         routeSimulator.drawnStrokes = drawStrokes
+        routeSimulator.drawnStrokeModes = strokeModes
         routeSimulator.persistDrawnStrokes()
+    }
+
+    /// 笔画模式补齐/截断到与笔画数一致（缺的按固定处理）
+    private func normalizedStrokeModes(count: Int) -> [Int] {
+        guard count > 0 else { return [] }
+        var out = Array(strokeModes.prefix(count))
+        if out.count < count { out.append(contentsOf: [Int](repeating: 0, count: count - out.count)) }
+        return out.map { $0 == 1 ? 1 : 0 }
+    }
+
+    private func strokeModeCount(_ mode: Int) -> Int {
+        normalizedStrokeModes(count: drawStrokes.count).filter { $0 == mode }.count
+    }
+
+    private func brushChip(_ title: String, color: Color, mode: Int) -> some View {
+        Button {
+            brushMode = mode
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            HStack(spacing: 4) {
+                Circle().fill(color).frame(width: 9, height: 9)
+                Text(title).font(.caption)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().fill(brushMode == mode ? color.opacity(0.18) : Color(UIColor.secondarySystemBackground))
+            )
+            .overlay(
+                Capsule().stroke(brushMode == mode ? color : Color.clear, lineWidth: 1.2)
+            )
+            .foregroundColor(brushMode == mode ? color : .secondary)
+        }
+        .buttonStyle(.plain)
     }
 
     private var drawOverlay: some View {
@@ -1130,6 +1170,7 @@ struct RouteSimSheet: View {
                 Spacer()
                 Button("清空") {
                     drawStrokes = []
+                    strokeModes = []
                     routeSimulator.clearDrawnStrokes()
                     optimizedPoints = nil
                     routeReady = false
@@ -1146,6 +1187,29 @@ struct RouteSimSheet: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
+
+            // v2.7.9 画笔调色板：换一种颜色 = 换一种走法，画完就按笔分区生效
+            if drawMode == 1 {
+                HStack(spacing: 10) {
+                    brushChip("固定", color: .green, mode: 0)
+                    brushChip("随机", color: .orange, mode: 1)
+                    Spacer()
+                    Text("固定 \(strokeModeCount(0)) 笔 · 随机 \(strokeModeCount(1)) 笔")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.top, 6)
+
+                Text(brushMode == 0
+                     ? "「固定」画笔：画成什么样就走什么样，坐标一分不差。整条线都要贴死时选绿笔。"
+                     : "「随机」画笔：大致沿这条线走，左右最多偏 2 米多；转成点序列后这一笔还会参与顺序打乱。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 2)
+            }
 
             // v3.1：旧笔画/断笔提醒——路线是「所有笔画按画的顺序连起来」，两笔离太远会拉直线
             if !drawStrokes.isEmpty {
@@ -1166,6 +1230,8 @@ struct RouteSimSheet: View {
             ZStack {
                 DrawMapView(
                     strokes: drawStrokesBinding,
+                    strokeModes: $strokeModes,
+                    brushMode: brushMode,
                     moveToRegion: $mapRegion,
                     drawingEnabled: drawMode == 1,
                     editingEnabled: drawMode == 2,
@@ -1214,7 +1280,7 @@ struct RouteSimSheet: View {
                 }
                 .disabled(allDrawPoints.count < 3)
                 Spacer()
-                Text("笔画 \(drawStrokes.count) · 点 \(allDrawPoints.count)")
+                Text("笔画 \(drawStrokes.count) · 点 \(allDrawPoints.count) · 固定 \(strokeModeCount(0)) / 随机 \(strokeModeCount(1))")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -1295,16 +1361,35 @@ struct RouteSimSheet: View {
     private func undoLastStroke() {
         guard !drawStrokes.isEmpty else { return }
         drawStrokes.removeLast()
+        if !strokeModes.isEmpty { strokeModes.removeLast() }
         if drawStrokes.isEmpty { optimizedPoints = nil }
+        // 空笔画（点了没拖动）也一并收掉，免得「撤销一笔」看着没反应
+        while drawStrokes.last?.isEmpty == true {
+            drawStrokes.removeLast()
+            if !strokeModes.isEmpty { strokeModes.removeLast() }
+        }
         syncDrawStrokes()
         routeReady = false
     }
 
+    /// 当前笔画（按 AI 优化开关决定是否先平滑），模式数组与之一 一 对齐
+    private func strokesForBuild() -> ([[CLLocationCoordinate2D]], [Int]) {
+        let modes = normalizedStrokeModes(count: drawStrokes.count)
+        if drawPreviewOn {
+            return (drawStrokes.map { routeSimulator.optimizeDrawnPath(points: $0) }, modes)
+        }
+        return (drawStrokes, modes)
+    }
+
     private func adoptDrawAsWaypoints() {
-        let src = drawPreviewOn
-            ? routeSimulator.optimizeDrawnPath(points: allDrawPoints)
-            : allDrawPoints
-        let n = routeSimulator.adoptDrawnAsWaypoints(points: src)
+        let (strokes, modes) = strokesForBuild()
+        let src = strokes.flatMap { $0 }
+        // 随机画笔那几笔的点 → 转成点序列后带随机标记（顺序可打乱）；固定笔一律保持原序
+        var wildSource: [CLLocationCoordinate2D] = []
+        for (i, s) in strokes.enumerated() where i < modes.count && modes[i] == 1 {
+            wildSource.append(contentsOf: s)
+        }
+        let n = routeSimulator.adoptDrawnAsWaypoints(points: src, wildSource: wildSource)
         guard n >= 2 else {
             UIApplication.shared.alert(body: "线路太短，多画一点再转。")
             return
@@ -1318,7 +1403,9 @@ struct RouteSimSheet: View {
         routeReady = false
         showDrawOverlay = false
         syncDrawStrokes()
-        AlertKitAPI.present(title: "已转成 \(n) 个可编辑点", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+        let wild = routeSimulator.waypointModes.filter { $0 }.count
+        AlertKitAPI.present(title: wild > 0 ? "已转成 \(n) 个点（\(wild) 个随机）" : "已转成 \(n) 个可编辑点",
+                            icon: .done, style: .iOS17AppleMusic, haptic: .success)
     }
 
     private func togglePreview() {
@@ -1333,12 +1420,12 @@ struct RouteSimSheet: View {
     private func finishDraw() {
         // v3.1: 每次按当前笔画现算，不再用缓存的预览点——否则改完点/撤销一笔后，
         // 走的还是改之前那条线（另一个「画的和走的不一样」的来源）
-        let src = drawPreviewOn
-            ? routeSimulator.optimizeDrawnPath(points: allDrawPoints)
-            : allDrawPoints
+        let (strokes, modes) = strokesForBuild()
+        let src = strokes.flatMap { $0 }
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
-        if routeSimulator.buildFromDrawnPath(points: src, minSpeed: minMps, maxSpeed: maxMps) {
+        // v2.7.9: 固定笔 → 坐标原样；随机笔 → 沿画线最多偏 2.2m（分区生效，互不影响）
+        if routeSimulator.buildFromDrawnStrokes(strokes, modes: modes, minSpeed: minMps, maxSpeed: maxMps) {
             // 起终点对齐到画线首末点：卡片显示与实际走的完全一致
             if let f = src.first, let l = src.last {
                 routeSimulator.setDrawnEndpoints(start: f, end: l)
@@ -1349,7 +1436,8 @@ struct RouteSimSheet: View {
             showDrawOverlay = false
             routeReady = true
             showRouteOnMap()
-            AlertKitAPI.present(title: "手画线路已生成", icon: .done, style: .iOS17AppleMusic, haptic: .success)
+            AlertKitAPI.present(title: strokeModeCount(1) > 0 ? "手画线路已生成（含随机段）" : "手画线路已生成",
+                                icon: .done, style: .iOS17AppleMusic, haptic: .success)
         } else {
             UIApplication.shared.alert(body: "画出的线路太短，请多画一些再点完成。")
         }
@@ -2145,6 +2233,8 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 // MARK: - DriftFix v2.4: 手画地图（画笔/移动/修改三模式：单指绘制轨迹，移动时滚动/缩放定位）
 struct DrawMapView: UIViewRepresentable {
     @Binding var strokes: [[CLLocationCoordinate2D]]
+    @Binding var strokeModes: [Int]
+    var brushMode: Int = 0                 // 0=固定(绿) 1=随机(橙)
     @Binding var moveToRegion: MKCoordinateRegion?
     var drawingEnabled: Bool = true
     var editingEnabled: Bool = false
@@ -2186,10 +2276,10 @@ struct DrawMapView: UIViewRepresentable {
             uiView.setRegion(region, animated: true)
             DispatchQueue.main.async { self.moveToRegion = nil }
         }
-        let sig = "\(strokes.count)|\(strokes.last?.count ?? -1)|\(previewPoints?.count ?? -1)|\(drawingEnabled)|\(editingEnabled)"
+        let sig = "\(strokes.count)|\(strokes.last?.count ?? -1)|\(previewPoints?.count ?? -1)|\(drawingEnabled)|\(editingEnabled)|\(strokeModes.map { "\($0)" }.joined())"
         if context.coordinator.lastSig != sig {
             context.coordinator.lastSig = sig
-            context.coordinator.syncOverlay(uiView, strokes: strokes, preview: previewPoints)
+            context.coordinator.syncOverlay(uiView, strokes: strokes, modes: strokeModes, preview: previewPoints)
         }
     }
 
@@ -2207,17 +2297,37 @@ struct DrawMapView: UIViewRepresentable {
         var editPress: UILongPressGestureRecognizer?
         var editTap: UITapGestureRecognizer?
         private var editDrag: EditDrag? = nil
+        /// 每根折线对应的画笔模式（0=固定 1=随机），渲染取色用
+        private var modeByOverlay: [ObjectIdentifier: Int] = [:]
         init(_ parent: DrawMapView) { self.parent = parent }
+
+        /// 新开一笔：笔画与模式同时入账，保证两个数组永远等长
+        private func appendEmptyStroke() {
+            parent.strokes.append([])
+            if parent.strokeModes.count > parent.strokes.count - 1 {
+                parent.strokeModes = Array(parent.strokeModes.prefix(parent.strokes.count - 1))
+            }
+            while parent.strokeModes.count < parent.strokes.count - 1 { parent.strokeModes.append(0) }
+            parent.strokeModes.append(parent.brushMode == 1 ? 1 : 0)
+        }
+
+        /// 笔画被删/被并时，把模式数组对齐（多余的直接截掉）
+        private func syncModeCount() {
+            if parent.strokeModes.count > parent.strokes.count {
+                parent.strokeModes = Array(parent.strokeModes.prefix(parent.strokes.count))
+            }
+            while parent.strokeModes.count < parent.strokes.count { parent.strokeModes.append(0) }
+        }
 
         @objc func handlePan(_ g: UIPanGestureRecognizer) {
             guard let mv = g.view as? MKMapView else { return }
             if !parent.drawingEnabled { return }   // 移动模式：交给地图自身手势
             switch g.state {
             case .began:
-                if parent.strokes.last?.isEmpty != true { parent.strokes.append([]) }
+                if parent.strokes.last?.isEmpty != true { appendEmptyStroke() }
             case .changed:
                 // DriftFix v2.6: 修复空笔画 guard 死锁——第一个点永远写不进去导致无法绘制
-                if parent.strokes.isEmpty || parent.strokes.last?.isEmpty == true { parent.strokes.append([]) }
+                if parent.strokes.isEmpty { appendEmptyStroke() }
                 let p = g.location(in: mv)
                 let c = mv.convert(p, toCoordinateFrom: mv)
                 if let lastC = parent.strokes.last?.last {
@@ -2229,13 +2339,14 @@ struct DrawMapView: UIViewRepresentable {
             case .ended:
                 // 单击（未拖动）也记一个点，避免"点了没反应"
                 if parent.strokes.isEmpty || parent.strokes.last?.isEmpty ?? true {
-                    if parent.strokes.isEmpty { parent.strokes.append([]) }
+                    if parent.strokes.isEmpty { appendEmptyStroke() }
                     let p = g.location(in: mv)
                     parent.strokes[parent.strokes.count - 1].append(mv.convert(p, toCoordinateFrom: mv))
                 }
             default:
                 break
             }
+            syncModeCount()
         }
 
         // MARK: - DriftFix v2.9 修改线路（拖动改点 / 轻点删点）
@@ -2284,7 +2395,7 @@ struct DrawMapView: UIViewRepresentable {
                         longitude: m.origin.longitude + dLon * m.weight
                     )
                 }
-                syncOverlay(mv, strokes: parent.strokes, preview: parent.previewPoints)
+                syncOverlay(mv, strokes: parent.strokes, modes: parent.strokeModes, preview: parent.previewPoints)
             case .ended, .cancelled, .failed:
                 editDrag = nil
             default:
@@ -2303,15 +2414,22 @@ struct DrawMapView: UIViewRepresentable {
                     .distance(from: CLLocation(latitude: anchor.latitude, longitude: anchor.longitude)) > radius
             }
             parent.strokes[hit.0] = kept
-            if kept.isEmpty { parent.strokes.remove(at: hit.0) }
+            if kept.isEmpty {
+                parent.strokes.remove(at: hit.0)
+                // 模式要跟着同一下标删，不能从尾部截——否则后面几笔的颜色会错位
+                if parent.strokeModes.indices.contains(hit.0) { parent.strokeModes.remove(at: hit.0) }
+            }
+            syncModeCount()
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            syncOverlay(mv, strokes: parent.strokes, preview: parent.previewPoints)
+            syncOverlay(mv, strokes: parent.strokes, modes: parent.strokeModes, preview: parent.previewPoints)
         }
 
-        func syncOverlay(_ mv: MKMapView, strokes: [[CLLocationCoordinate2D]], preview: [CLLocationCoordinate2D]?) {
+        func syncOverlay(_ mv: MKMapView, strokes: [[CLLocationCoordinate2D]], modes: [Int], preview: [CLLocationCoordinate2D]?) {
             for o in mv.overlays where o is MKPolyline { mv.removeOverlay(o) }
-            for s in strokes where s.count >= 2 {
+            modeByOverlay.removeAll()
+            for (i, s) in strokes.enumerated() where s.count >= 2 {
                 let poly = MKPolyline(coordinates: s, count: s.count)
+                modeByOverlay[ObjectIdentifier(poly)] = (i < modes.count && modes[i] == 1) ? 1 : 0
                 mv.addOverlay(poly, level: .aboveRoads)
             }
             if let pv = preview, pv.count >= 2 {
@@ -2326,9 +2444,17 @@ struct DrawMapView: UIViewRepresentable {
                 let isPreview = parent.previewPoints != nil &&
                     abs(poly.pointCount - (parent.previewPoints?.count ?? 0)) <= 1 &&
                     mapView.overlays.last === poly
-                r.strokeColor = isPreview ? .systemBlue : .systemGreen
-                r.lineWidth = isPreview ? 4 : 5
-                r.alpha = isPreview ? 0.95 : 0.9
+                if isPreview {
+                    r.strokeColor = .systemBlue
+                    r.lineWidth = 4
+                    r.alpha = 0.95
+                } else {
+                    // v2.7.9：绿=固定（照画线走），橙=随机（左右摆动 + 顺序可打乱）
+                    let isWild = modeByOverlay[ObjectIdentifier(poly)] == 1
+                    r.strokeColor = isWild ? .systemOrange : .systemGreen
+                    r.lineWidth = isWild ? 5 : 5
+                    r.alpha = isWild ? 0.95 : 0.9
+                }
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)
