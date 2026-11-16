@@ -115,6 +115,20 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var speedMultiplier: Double = 1.0
     private let updateInterval: TimeInterval = 1.0
 
+    // MARK: - DriftFix v3.3 定位报文真实性（参考 wloc 的实测经验）
+    // wloc 用改网络定位的方式做假位置，它的配置里精度默认就是 25 米 —— 真实定位本来就不精确。
+    // 我们之前每点给 3~6 米、还每秒重摇，等于宣称"比真 GPS 还准"，部分 App 会把这种点当高可信点直接用，
+    // 一旦和它自己的判步/配速模型对不上就丢点、重算，表现成跳一下。
+    // 现在：水平精度取 4~9 米并慢漂移（十几秒才换一次），垂直精度固定 12 米，海拔不再逐秒抖。
+    // 同时把 speed / course 补上 —— 不给的话 CLLocation 里是 -1（无效），App 只能拿两点反推，
+    // 遇到停走、拐弯就容易出「99'99"」这类怪值。
+    private var lastInjected: (coord: CLLocationCoordinate2D, at: Date)? = nil
+    private var reportedAccuracy: Double = 5.0
+    private var accuracyNextUpdate = Date.distantPast
+    // 起步沉降：locationd 是融合引擎，切换目标后要一两拍才收敛（wloc 的文档也强调 iOS 26 起缓存更重）。
+    // 原来第 0 秒投起点、第 1 秒就出发，等于在收敛窗口里就开始走，首段容易被吞或被拉回。
+    private var warmupTicks = 0
+
     // MARK: - DriftFix v2.2 速度区间（m/s）
     // 匀速轨迹一眼假。播放时速度在 [min,max] 内慢速随机游走（带回归中值的惯性），
     // 相邻点间距=当前速度×1s。GPX 存档保存的是实际注入序列（变间距），重放逐点还原。
@@ -1421,6 +1435,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.startUpdatingLocation()
         
         startBackgroundTask()
+        lastInjected = nil
+        accuracyNextUpdate = .distantPast
+        warmupTicks = 2          // 原地 2 拍再起步，让定位先落到起点
         updateLocation(at: 0)
         
         timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
@@ -1433,6 +1450,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         if isPaused {
             isPaused = false
             startBackgroundTask()
+            warmupTicks = 1      // 恢复时也先沉一拍，避免长时间不动后第一拍速度骤降
             timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
                 self?.advanceToNextPoint()
             }
@@ -1452,6 +1470,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         isPaused = false
         currentPointIndex = 0
         progress = 0.0
+        warmupTicks = 0
+        lastInjected = nil
         routePoints = []
         routePolyline = nil
         allRoutePolylines = []
@@ -1464,6 +1484,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     
     private func advanceToNextPoint() {
+        // 起步沉降期：坐标不动、时间戳照常刷新，让系统先接受"人就在起点"
+        if warmupTicks > 0 {
+            warmupTicks -= 1
+            updateLocation(at: currentPointIndex)
+            return
+        }
+
         currentPointIndex += 1
         
         if currentPointIndex >= routePoints.count {
@@ -1509,14 +1536,52 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         // DriftFix: 注入坐标 —— polyline 判为 WGS 时直接用原始点（避免 GCJ→WGS 双重转换）
         let wgsCoord = polylineIsWGS ? coord : CoordTransform.gcj02ToWgs84(coord)
+        let now = Date()
+
+        // 水平精度慢漂移（真实 GPS 是分钟级缓变，不是每秒乱跳）
+        if now >= accuracyNextUpdate {
+            reportedAccuracy = Double.random(in: 4.0...9.0)
+            accuracyNextUpdate = now.addingTimeInterval(Double.random(in: 12.0...25.0))
+        }
+
+        // 用"上一拍实际投出去的坐标"算瞬时速度和航向；停着不动就是 0 速、无航向
+        var speed = 0.0
+        var course = -1.0
+        if let last = lastInjected {
+            let dt = min(max(now.timeIntervalSince(last.at), 0.5), 2.0)
+            let d = CLLocation(latitude: last.coord.latitude, longitude: last.coord.longitude)
+                .distance(from: CLLocation(latitude: wgsCoord.latitude, longitude: wgsCoord.longitude))
+            speed = d / dt
+            if d > 0.3 {
+                course = bearing(from: last.coord, to: wgsCoord)
+            } else {
+                course = -1
+            }
+        }
+
         let location = CLLocation(
             coordinate: wgsCoord,
-            altitude: altitude + Double.random(in: -0.5...0.5), // Slight altitude jitter
-            horizontalAccuracy: Double.random(in: 3.0...6.0),   // Varying accuracy
-            verticalAccuracy: 5,
-            timestamp: Date()
+            altitude: altitude,
+            horizontalAccuracy: reportedAccuracy,
+            verticalAccuracy: 12,
+            course: course,
+            speed: speed,
+            timestamp: now
         )
+        lastInjected = (wgsCoord, now)
         LocSimManager.startLocSim(location: location)
+    }
+
+    /// 方位角（0° = 正北，顺时针）
+    private func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+        let lat1 = a.latitude * .pi / 180
+        let lat2 = b.latitude * .pi / 180
+        let dLon = (b.longitude - a.longitude) * .pi / 180
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        var deg = atan2(y, x) * 180 / .pi
+        if deg < 0 { deg += 360 }
+        return deg
     }
     
     // MARK: - DriftFix 线路保存/加载

@@ -37,13 +37,30 @@ class LocSimManager {
             simManager.stopLocationSimulation()
             simManager.clearSimulatedLocations()
         }
-        simManager.appendSimulatedLocation(location)
+        // DriftFix v3.3：补投不能把旧 CLLocation 原样再发一遍 —— 它的 timestamp 停在最后一个
+        // 轨迹点，系统会把"过期定位"当无效丢掉，回落到真实定位，位置就跳回现实了。
+        // 补投一律按「原地站住」重建：新时间戳 + 速度 0 + 航向无效。
+        let injected: CLLocation
+        if Date().timeIntervalSince(location.timestamp) > 0.5 {
+            injected = CLLocation(
+                coordinate: location.coordinate,
+                altitude: location.altitude,
+                horizontalAccuracy: location.horizontalAccuracy,
+                verticalAccuracy: location.verticalAccuracy,
+                course: -1,
+                speed: 0,
+                timestamp: Date()
+            )
+        } else {
+            injected = location
+        }
+        simManager.appendSimulatedLocation(injected)
         simManager.flush()
         if first {
             simManager.startLocationSimulation()
             sessionActive = true
         }
-        lastLocation = location
+        lastLocation = injected
         lastPushAt = Date()
     }
 

@@ -5,6 +5,26 @@ import SwiftUI
 import MapKit
 import UIKit
 import AlertKit
+import Network
+
+/// 只回答一件事：现在是不是 Wi-Fi 在承载网络。
+/// 用来在开始模拟前提醒关 Wi-Fi —— 系统定位是 GPS + Wi-Fi/基站 融合的，
+/// 我们只接管 GPS 这一路（wloc 的原理正好相反，它只改 Wi-Fi/基站那一路），
+/// 两路坐标打架时就会出现"跳回真实位置"。
+final class WifiLinkWatcher: ObservableObject {
+    @Published var onWifi = false
+    private let monitor = NWPathMonitor()
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            let wifi = path.usesInterfaceType(.wifi)
+            DispatchQueue.main.async { self?.onWifi = wifi }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.liush.andromeda.wifi"))
+    }
+
+    deinit { monitor.cancel() }
+}
 
 /// 分笔接缝（第 index 笔起点离上一笔终点多少米）
 private struct StrokeGap: Identifiable {
@@ -17,6 +37,7 @@ struct RouteSimSheet: View {
     @ObservedObject var routeSimulator: RouteSimulator
     @Binding var mapRegion: MKCoordinateRegion?
     @Binding var isPresented: Bool
+    @StateObject private var wifiWatcher = WifiLinkWatcher()
     
     @State private var startText: String = ""
     @State private var endText: String = ""
@@ -219,6 +240,15 @@ struct RouteSimSheet: View {
                                 .font(.headline)
                             }
                             .padding(.horizontal)
+
+                            // 开始前的环境提醒：只接管 GPS 时，Wi-Fi/基站那一路还在报真实位置
+                            if wifiWatcher.onWifi {
+                                Text("Wi-Fi 开着。系统定位会把 Wi-Fi 的位置和这里模拟的点混在一起，出现跳回或漂移。跑之前把 Wi-Fi 关掉（VPN 也关），位置就只认模拟轨迹。")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal)
+                            }
 
                             // DriftFix: 保存线路（存"实际注入序列"为 GPX，可重放可导出）
                             Button(action: saveCurrentRoute) {
