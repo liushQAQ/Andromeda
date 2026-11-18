@@ -49,6 +49,9 @@ struct RouteSimSheet: View {
     @AppStorage("andromedaSwapEnds") private var swapEndsOn: Bool = false
     @AppStorage("andromedaRandomFlip") private var randomFlipOn: Bool = false
     @AppStorage("andromedaLoops") private var loopCount: Int = 1
+    // v2.7.11：手画随机抖动幅度（橙笔摆动强度，0=不抖）；从指定点继续的滑杆位置
+    @AppStorage("andromedaDrawSway") private var drawSwayMeters: Double = 2.2
+    @State private var resumeIdx: Int = 0
     @AppStorage("andromedaSnapLong") private var snapLongOn: Bool = true
     @AppStorage("andromedaFillSpacing") private var fillSpacing: Double = 200
     @State private var isSearchingStart: Bool = false
@@ -112,8 +115,9 @@ struct RouteSimSheet: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 16) {
-                    // MARK: - Route Status (when simulating)
-                    if routeSimulator.isSimulating {
+                    // MARK: - Route Status (when simulating / 驻留)
+                    // v2.7.11：停止=驻留（isPaused），卡片要继续显示，才能「从指定点继续」
+                    if routeSimulator.isSimulating || routeSimulator.isPaused {
                         simulationStatusCard
                     } else {
                         // MARK: - Start Point
@@ -290,8 +294,8 @@ struct RouteSimSheet: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
-                        routeSimulator.stopSimulation()
-                        routeReady = false
+                        // v2.7.11：地图页的 X 也是「驻留最后一点」，不跳回真实位置
+                        routeSimulator.holdSimulation()
                     }) {
                         Image(systemName: "stop.circle.fill")
                             .foregroundColor(.red)
@@ -614,7 +618,7 @@ struct RouteSimSheet: View {
         case .draw:
             return "手画路线：在地图上按住拖动画出线路，系统自动平滑优化成自然步态轨迹。"
         case .area:
-            return "区域自动：只设起点和终点，再选一块区域（手画或圆形）、定一个目标公里数。中间怎么走系统自己排：把区域切成几十米一格，每一步只在隔壁格子里随机挑，像人在街区里走一样，不会横穿飞过去，也不会满图乱交叉；走满公里数才停。"
+            return "区域自动：起点终点可不填（不填就从区域第一个点出发、绕满回到该点），再选一块区域（手画或圆形）、定一个目标公里数。中间怎么走系统自己排：把区域切成几十米一格，每一步只在隔壁格子里随机挑，像人在街区里走一样，不会横穿飞过去，也不会满图乱交叉；走满公里数才停。"
         }
     }
 
@@ -839,7 +843,7 @@ struct RouteSimSheet: View {
             }
             .padding(.horizontal)
 
-            Text("怎么走：起点先进区域 → 把区域切成几十米一格，每步只在隔壁格子里就近随机走（像人在街区里逛，不会横穿飞过去、不会满图乱交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。区域可以手画，也可以只点一个中心、拖一个半径。")
+            Text("怎么走：起点不填就从区域第一个点出发 → 把区域切成几十米一格，每步只在隔壁格子里就近随机走（像人在街区里逛，不会横穿飞过去、不会满图乱交叉）→ 走满 \(String(format: "%.1f", routeSimulator.areaTargetKm)) 公里 → 最后回到终点。区域可以手画，也可以只点一个中心、拖一个半径。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -1203,12 +1207,31 @@ struct RouteSimSheet: View {
 
                 Text(brushMode == 0
                      ? "「固定」画笔：画成什么样就走什么样，坐标一分不差。整条线都要贴死时选绿笔。"
-                     : "「随机」画笔：大致沿这条线走，左右最多偏 2 米多；转成点序列后这一笔还会参与顺序打乱。")
+                     : "「随机」画笔：大致沿这条线走，左右摆动幅度用下面的滑杆调；转成点序列后这一笔还会参与顺序打乱。")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.top, 2)
+
+                // v2.7.11：随机抖动幅度可调（橙笔摆动强度，0 = 完全不抖）
+                HStack(spacing: 8) {
+                    Text("抖动幅度")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $drawSwayMeters, in: 0...3, step: 0.1)
+                    Text(String(format: "%.1f 米", drawSwayMeters))
+                        .font(.caption)
+                        .foregroundColor(drawSwayMeters < 0.05 ? .secondary : .orange)
+                        .monospacedDigit()
+                }
+                .padding(.horizontal)
+                Text("橙笔的摆动强度。绿笔永远贴死不抖；滑到 0 = 橙笔也完全不抖。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.bottom, 2)
             }
 
             // v3.1：旧笔画/断笔提醒——路线是「所有笔画按画的顺序连起来」，两笔离太远会拉直线
@@ -1435,6 +1458,7 @@ struct RouteSimSheet: View {
             syncDrawStrokes()
             showDrawOverlay = false
             routeReady = true
+            routeSimulator.isPaused = false
             showRouteOnMap()
             AlertKitAPI.present(title: strokeModeCount(1) > 0 ? "手画线路已生成（含随机段）" : "手画线路已生成",
                                 icon: .done, style: .iOS17AppleMusic, haptic: .success)
@@ -1665,6 +1689,15 @@ struct RouteSimSheet: View {
         .padding(.horizontal)
     }
     
+    // v2.7.11：续跑滑杆的说明文字（坐标 + 距起点沿路里程）
+    private func resumePointSummary(_ idx: Int) -> String {
+        let pts = routeSimulator.routePoints
+        guard idx >= 0, idx < pts.count else { return "" }
+        let d = routeSimulator.distanceFromStart(to: idx)
+        let c = pts[idx]
+        return String(format: "%.5f, %.5f · 距起点 %.0f m", c.latitude, c.longitude, d)
+    }
+
     // MARK: - Simulation Status Card
     private var simulationStatusCard: some View {
         VStack(spacing: 16) {
@@ -1702,7 +1735,7 @@ struct RouteSimSheet: View {
             )
             
             // Controls
-            HStack(spacing: 20) {
+            HStack(spacing: 10) {
                 Button(action: {
                     routeSimulator.togglePause()
                 }) {
@@ -1721,10 +1754,10 @@ struct RouteSimSheet: View {
                 }
                 
                 Button(action: {
-                    routeSimulator.stopSimulation()
-                    routeReady = false
+                    // v2.7.11：停止=驻留最后一点（保活继续补投，位置不跳回真实）
+                    routeSimulator.holdSimulation()
                     AlertKitAPI.present(
-                        title: "路线已停止",
+                        title: "已停在最后一点",
                         icon: .done,
                         style: .iOS17AppleMusic,
                         haptic: .success
@@ -1738,10 +1771,72 @@ struct RouteSimSheet: View {
                     .padding()
                     .background(
                         RoundedRectangle(cornerRadius: 14)
+                            .fill(Color.gray)
+                    )
+                    .foregroundColor(.white)
+                    .font(.headline)
+                }
+
+                Button(action: {
+                    // v2.7.11：「真实位置」= 关闭所有模拟 GPS，立刻回到现实位置
+                    routeSimulator.stopSimulation()
+                    routeReady = false
+                    AlertKitAPI.present(
+                        title: "已回到真实位置",
+                        icon: .done,
+                        style: .iOS17AppleMusic,
+                        haptic: .warning
+                    )
+                }) {
+                    HStack {
+                        Image(systemName: "location.slash.fill")
+                        Text("真实位置")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
                             .fill(Color.red)
                     )
                     .foregroundColor(.white)
                     .font(.headline)
+                }
+            }
+
+            // v2.7.11：从指定点继续（任何方案任何线路都能用：拖到第 N 点，接着走）
+            if !routeSimulator.isSimulating, routeSimulator.routePoints.count > 2 {
+                let n = routeSimulator.routePoints.count
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("从指定点继续")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("第 \(min(resumeIdx + 1, n))/\(n) 点")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { Double(min(resumeIdx, n - 1)) },
+                        set: { resumeIdx = Int($0) }
+                    ), in: 0...Double(n - 1), step: 1)
+                    HStack {
+                        Text(resumePointSummary(min(resumeIdx, n - 1)))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button {
+                            routeSimulator.resumeFrom(index: resumeIdx)
+                            resumeIdx = 0
+                        } label: {
+                            Text("从这里继续")
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
                 }
             }
             
@@ -1946,17 +2041,25 @@ struct RouteSimSheet: View {
                 UIApplication.shared.alert(body: "先在「自动绕行区域」里手画一块区域。")
                 return
             }
-            guard routeSimulator.userWaypoints.count >= 2,
-                  let s = routeSimulator.userWaypoints.first,
-                  let e = routeSimulator.userWaypoints.last else {
-                UIApplication.shared.alert(body: "先设好起点和终点。")
-                return
+            // v2.7.11：起点终点不再强制（老总令「手绘必须输入起点和终点，没必要吧」）。
+            // 不填就从区域第一个点出发、绕满目标公里数后回到该点。
+            var s = routeSimulator.userWaypoints.first
+            var e = routeSimulator.userWaypoints.last
+            if s == nil || e == nil {
+                let seed = poly[0]
+                routeSimulator.userWaypoints = [seed, seed]
+                routeSimulator.waypointModes = [false, false]
+                s = seed
+                e = seed
+                startText = String(format: "%.5f, %.5f", seed.latitude, seed.longitude)
+                endText = startText
             }
+            guard let sv = s, let ev = e else { return }
             let minMps = speedMinKmh / 3.6
             let maxMps = speedMaxKmh / 3.6
             routeSimulator.travelMode = selectedMode
-            routeSimulator.buildAreaRoute(start: s,
-                                          end: e,
+            routeSimulator.buildAreaRoute(start: sv,
+                                          end: ev,
                                           polygon: poly,
                                           targetMeters: routeSimulator.areaTargetKm * 1000,
                                           minSpeed: minMps,
@@ -1964,6 +2067,7 @@ struct RouteSimSheet: View {
                                           snapToRoads: snapLongOn) { ok, message in
                 if ok {
                     routeReady = true
+                    routeSimulator.isPaused = false
                     showRouteOnMap()
                     if let msg = message { UIApplication.shared.alert(body: msg) }
                 } else {
@@ -1989,6 +2093,7 @@ struct RouteSimSheet: View {
             routeSimulator.buildSmartFreeRoute(points: pts, minSpeed: minMps, maxSpeed: maxMps, snapLongSegments: snapLongOn) { success, error in
                 if success {
                     routeReady = true
+                    routeSimulator.isPaused = false
                     showRouteOnMap()
                 } else {
                     UIApplication.shared.alert(body: error ?? "Failed to calculate route")
@@ -1999,6 +2104,7 @@ struct RouteSimSheet: View {
         routeSimulator.calculateFlexibleRoute(points: pts, mode: selectedMode, minSpeed: minMps, maxSpeed: maxMps) { success, error in
             if success {
                 routeReady = true
+                routeSimulator.isPaused = false
                 showRouteOnMap()
             } else {
                 UIApplication.shared.alert(body: error ?? "Failed to calculate route")
@@ -2200,6 +2306,7 @@ struct RouteSimSheet: View {
             endText = String(format: "%.5f, %.5f", last.latitude, last.longitude)
         }
         routeReady = true
+        routeSimulator.isPaused = false
         if let poly = routeSimulator.routePolyline {
             let rect = poly.boundingMapRect
             mapRegion = MKCoordinateRegion(rect.insetBy(dx: -rect.size.width * 0.2, dy: -rect.size.height * 0.2))

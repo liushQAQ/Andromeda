@@ -954,6 +954,10 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                                       wild: [Bool]) -> [CLLocationCoordinate2D] {
         guard pts.count >= 3, reference.count >= 2, wild.count == reference.count else { return pts }
         guard wild.contains(true) else { return pts }   // 全是固定笔：一个坐标都不动
+        // v2.7.11：幅度手画页可调（andromedaDrawSway，0 = 完全不抖）
+        let amp: Double
+        if let v = UserDefaults.standard.object(forKey: "andromedaDrawSway") as? Double { amp = v } else { amp = 2.2 }
+        guard amp > 0.05 else { return pts }
 
         // 重采样点本来就沿参考折线前进 ⇒ 用单调指针找最近点，O(n+m)，不在这里做全量比距离
         var raw = [Double](repeating: 0, count: pts.count)
@@ -996,7 +1000,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 两个不同波长叠一起，看起来像人贴着线走而不是机器正弦
             let wob = sin(2 * Double.pi * traveled / 43.0) * 0.65
                     + sin(2 * Double.pi * traveled / 101.0 + 1.7) * 0.35
-            let offset = 2.2 * wob * weight[i]
+            let offset = amp * wob * weight[i]
             let perp = bearing + Double.pi / 2
             let dLat = offset * cos(perp)
             let dLon = offset * sin(perp)
@@ -1883,7 +1887,66 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         endBackgroundTask()
         LocSimManager.stopLocSim()
     }
-    
+
+    // MARK: - DriftFix v2.7.11 停止=驻留（老总令：停止不许跳回真实位置，轨迹要能接得上）
+    // 不清线路、不动进度、不 stopLocSim —— LocSimManager 的保活本来就会每秒补投最后一个点
+    // （新时间戳 + 速度 0），位置就定在原地。真想回到现实位置，走「真实位置」按钮（stopSimulation）。
+    func holdSimulation() {
+        timer?.invalidate()
+        timer = nil
+        isSimulating = false
+        isPaused = true          // 卡片保持可见，按钮变 Resume，可直接原地继续
+        warmupTicks = 0
+        locationManager.stopUpdatingLocation()
+        endBackgroundTask()
+    }
+
+    // MARK: - DriftFix v2.7.11 从指定点继续（老总令：不论哪个方案哪条线路，都能指定从某个点接着走）
+    func resumeFrom(index: Int) {
+        guard !routePoints.isEmpty else { return }
+        currentPointIndex = max(0, min(index, routePoints.count - 1))
+        isSimulating = true
+        isPaused = false
+        progress = Double(currentPointIndex) / Double(max(totalPoints - 1, 1))
+        locationManager.requestAlwaysAuthorization()
+        locationManager.startUpdatingLocation()
+        startBackgroundTask()
+        lastInjected = nil
+        accuracyNextUpdate = .distantPast
+        warmupTicks = 2          // 原地 2 拍再起步，先让系统接受"人就在这一点"
+        noiseEast = 0.0
+        noiseNorth = 0.0
+        noiseLastAt = .distantPast
+        metersSinceDropout = 0.0
+        nextDropoutMeters = Double.random(in: 2000.0...6000.0)
+        dropoutUntil = .distantPast
+        verticalNextUpdate = .distantPast
+        updateLocation(at: currentPointIndex)
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
+            self?.advanceToNextPoint()
+        }
+        RunLoop.current.add(timer!, forMode: .common)
+    }
+
+    /// 距起点沿路里程（缓存前缀和，滑杆拖动时 O(1)）
+    private var cumDistCache: [Double] = []
+    private var cumDistForCount = -1
+    func distanceFromStart(to index: Int) -> Double {
+        guard routePoints.count >= 2 else { return 0 }
+        if cumDistForCount != routePoints.count || cumDistCache.count != routePoints.count {
+            var acc = 0.0
+            cumDistCache = [0.0]
+            for i in 1..<routePoints.count {
+                acc += distanceBetween(routePoints[i - 1], routePoints[i])
+                cumDistCache.append(acc)
+            }
+            cumDistForCount = routePoints.count
+        }
+        let i = max(0, min(index, cumDistCache.count - 1))
+        return cumDistCache[i]
+    }
+
     private func advanceToNextPoint() {
         // 起步沉降期：坐标不动、时间戳照常刷新，让系统先接受"人就在起点"
         if warmupTicks > 0 {
