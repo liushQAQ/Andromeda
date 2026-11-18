@@ -117,8 +117,12 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 老总原话：「更换画笔，画笔样式或者颜色不同，来指定某段区域固定，不随机。」
     @Published var drawnStrokeModes: [Int] = []
 
-    // v2.7.11 改 internal：续跑滑杆（RouteSimView）要读点位显示坐标/序号
-    var routePoints: [CLLocationCoordinate2D] = []
+    // v2.7.11 改 internal：续跑滑杆（RouteSimView）要读点位显示坐标/序号。
+    // didSet：路线重生成（哪怕点数恰好相同）必须把「距起点里程」前缀和缓存一并作废，
+    // 否则滑杆会显示上一条线的旧里程（2026-11-19 审计发现）。
+    var routePoints: [CLLocationCoordinate2D] = [] {
+        didSet { cumDistForCount = -1 }
+    }
     private var timer: Timer? = nil
     private var altitude: Double = 0.0
     private var speedMultiplier: Double = 1.0
