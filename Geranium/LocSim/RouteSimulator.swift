@@ -161,6 +161,18 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var reportedVertical: Double = 12.0
     private var verticalNextUpdate = Date.distantPast
 
+    // MARK: - DriftFix v2.7.12 偶发驻足 / 海拔游走 / 步频联动（对照真人基准图：步频37、爬升30m、走走停停）
+    private var strollEnabled = (UserDefaults.standard.object(forKey: "andromedaStrolls") as? Bool) ?? true
+    private var strollUntil: Date = .distantPast
+    private var nextStrollAt: Date = .distantPast
+    private var altitudeBase: Double = 0.0
+    private var altNoise: Double = 0.0
+    private var altLastAt: Date = .distantPast
+    private var currentSpeedMps: Double = 0.0
+    private var stepLinkEnabled = (UserDefaults.standard.object(forKey: "andromedaCadenceLink") as? Bool) ?? true
+    private var lastLinkAt: Date = .distantPast
+    private var lastLinkCadence: Int = 0
+
     // MARK: - DriftFix v2.2 速度区间（m/s）
     // 匀速轨迹一眼假。播放时速度在 [min,max] 内慢速随机游走（带回归中值的惯性），
     // 相邻点间距=当前速度×1s。GPX 存档保存的是实际注入序列（变间距），重放逐点还原。
@@ -1456,8 +1468,13 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         let stepY = (latMax - latMin) / Double(rows - 1)
 
         func coord(_ i: Int, _ j: Int) -> CLLocationCoordinate2D {
-            CLLocationCoordinate2D(latitude: latMin + stepY * Double(j),
-                                   longitude: lonMin + stepX * Double(i))
+            // v2.7.12 每格 ±0.18 格确定性抖动：破掉直角网格与规整外圈（同格哈希一致，
+            // 预检 inPolygon 与行走用同一坐标，不会出现「预检过、走时出界」）
+            let h = UInt64(truncatingIfNeeded: (i &* 73856093) ^ (j &* 19349663))
+            let jx = (Double(h % 1000) / 1000.0 - 0.5) * 0.36 * cell / lonScale
+            let jy = (Double((h >> 20) % 1000) / 1000.0 - 0.5) * 0.36 * cell / latScale
+            return CLLocationCoordinate2D(latitude: latMin + stepY * Double(j) + jy,
+                                          longitude: lonMin + stepX * Double(i) + jx)
         }
 
         func inPolygon(_ p: CLLocationCoordinate2D) -> Bool {
@@ -1707,6 +1724,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         if anchors.isEmpty { anchors = [start] }
         anchors.insert(start, at: 0)
         anchors.append(end)
+        // v2.7.12 拐角弧化：格点折角处退距插过渡点，90° 直角变自然弧（贴路长腿不受影响）
+        anchors = roundedPath(anchors)
 
         var path: [CLLocationCoordinate2D] = []
         var legIndex = 0
@@ -1848,8 +1867,17 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         nextDropoutMeters = Double.random(in: 2000.0...6000.0)
         dropoutUntil = .distantPast
         verticalNextUpdate = .distantPast
+        // v2.7.12：驻足/海拔/联动状态开跑重置
+        strollUntil = .distantPast
+        nextStrollAt = Date().addingTimeInterval(Double.random(in: 120.0...300.0))
+        altitudeBase = altitude
+        altNoise = 0.0
+        altLastAt = Date()
+        currentSpeedMps = 0.0
+        lastLinkAt = .distantPast
+        syncStepLink(force: true)
         updateLocation(at: 0)
-        
+
         timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
             self?.advanceToNextPoint()
         }
@@ -1960,6 +1988,21 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
 
+        // v2.7.12 偶发驻足：每 2~8 分钟随机停 10~40 秒。坐标不动、时间戳照常、速度自然归 0，
+        // 平均配速被拉向真人漫步档，配速曲线才会出现红色慢段（对照真人基准图：5h20m 只走 10km）。
+        if strollEnabled {
+            let nowS = Date()
+            if nowS >= strollUntil && nowS >= nextStrollAt {
+                strollUntil = nowS.addingTimeInterval(Double.random(in: 10.0...40.0))
+                nextStrollAt = nowS.addingTimeInterval(Double.random(in: 120.0...480.0))
+                syncStepLink(force: true)   // 驻足切档时顺带对齐步频
+            }
+            if nowS < strollUntil {
+                updateLocation(at: currentPointIndex)
+                return
+            }
+        }
+
         currentPointIndex += 1
         
         if currentPointIndex >= routePoints.count {
@@ -2024,6 +2067,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
                 .distance(from: CLLocation(latitude: wgsCoord.latitude, longitude: wgsCoord.longitude))
             stepMeters = d
             speed = d / dt
+            currentSpeedMps = speed
+            speedEma = speedEma * 0.85 + speed * 0.15
             if d > 0.3 {
                 course = bearing(from: last.coord, to: wgsCoord)
             } else {
@@ -2055,9 +2100,21 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             emitCoord = jittered(wgsCoord, at: now)
         }
 
+        // v2.7.12 海拔低频游走：真实 GPS 高程噪声 ±3~8m 就是「累计爬升」的来源（真人 30m vs 我们 2.6m）
+        var altOut = altitude
+        if gpsRealism {
+            let dtA = min(max(now.timeIntervalSince(altLastAt), 0.0), 5.0)
+            altLastAt = now
+            let decayA = exp(-dtA / 90.0)
+            let kA = sqrt(max(0.0, 1.0 - decayA * decayA))
+            altNoise = altNoise * decayA + gaussRandom() * 3.5 * kA
+            if altNoise > 8.0 { altNoise = 8.0 } else if altNoise < -8.0 { altNoise = -8.0 }
+            altOut = altitudeBase + altNoise
+        }
+
         let location = CLLocation(
             coordinate: emitCoord,
-            altitude: altitude,
+            altitude: altOut,
             horizontalAccuracy: accuracy,
             verticalAccuracy: vertical,
             course: course,
@@ -2096,6 +2153,57 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         if u < 1e-9 { u = 1e-9 }
         let v = Double.random(in: 0.0...1.0)
         return sqrt(-2.0 * log(u)) * cos(2.0 * .pi * v)
+    }
+
+    // MARK: - DriftFix v2.7.12 步频联动（deb 零改动）
+    // 把实际模拟速度换算成步数插件的 cadenceSpm / strideMeters，写它的配置域
+    // （deb 每 2 秒巡检热切、换档不回溯），deb 一行不用改。
+    // 换算：cadence = 90 + v×30（钳 100~190，与 deb 拟真钳制同区间）；stride = v×60/cadence（钳 0.55~1.25）。
+    // 走 0.9m/s → 117spm；跑 2.6m/s → 168spm×0.93m ✓。悦跑圈反推步幅 = GPS距离÷步数 = 真实。
+    var plannedSpeedMps: Double = 1.4          // 开始前由视图按速度区间中值设定
+    private var speedEma: Double = 0.0
+    private var lastLinkAt: Date = .distantPast
+    private var lastLinkCadence: Int = 0
+
+    func syncStepLink(force: Bool = false) {
+        guard stepLinkEnabled else { return }
+        let nowL = Date()
+        if !force, nowL.timeIntervalSince(lastLinkAt) < 120.0 { return }
+        let v = speedEma > 0.15 ? speedEma : plannedSpeedMps   // 驻足/起步期按计划速度，不频繁改档
+        var cad = min(max(90.0 + v * 30.0, 100.0), 190.0)
+        var stride = min(max(v * 60.0 / cad, 0.55), 1.25)
+        cad = min(max(v * 60.0 / stride, 100.0), 190.0)
+        let cadI = Int(cad.rounded())
+        if !force, cadI == lastLinkCadence { return }
+        lastLinkCadence = cadI
+        lastLinkAt = nowL
+        // /usr/bin/defaults 走 cfprefsd 正规通道（直接写文件会被缓存吞掉），root spawn 保权限
+        let domain = "com.liush.joyrunsteps"
+        spawnRoot("/usr/bin/defaults", ["defaults", "write", domain, "cadenceSpm", "-float", String(cadI)], nil, nil)
+        spawnRoot("/usr/bin/defaults", ["defaults", "write", domain, "strideMeters", "-float", String(format: "%.2f", stride)], nil, nil)
+    }
+
+    /// v2.7.12 网格拐角弧化：锚点折角处退距 r 插二次贝塞尔过渡点，90° 直角变自然弧（对照真人轨迹贴路弯）
+    private func roundedPath(_ pts: [CLLocationCoordinate2D], radiusMeters: Double = 18.0) -> [CLLocationCoordinate2D] {
+        guard pts.count >= 3 else { return pts }
+        var out: [CLLocationCoordinate2D] = [pts[0]]
+        for k in 1..<(pts.count - 1) {
+            let prev = pts[k - 1], cur = pts[k], next = pts[k + 1]
+            let dIn = distanceBetween(prev, cur), dOut = distanceBetween(cur, next)
+            guard dIn > 2, dOut > 2 else { out.append(cur); continue }
+            let r = min(radiusMeters, dIn * 0.4, dOut * 0.4)
+            let f = r / dIn, g = r / dOut
+            let a = CLLocationCoordinate2D(latitude: cur.latitude + (prev.latitude - cur.latitude) * f,
+                                           longitude: cur.longitude + (prev.longitude - cur.longitude) * f)
+            let b = CLLocationCoordinate2D(latitude: cur.latitude + (next.latitude - cur.latitude) * g,
+                                           longitude: cur.longitude + (next.longitude - cur.longitude) * g)
+            out.append(a)
+            out.append(CLLocationCoordinate2D(latitude: (a.latitude + cur.latitude * 2 + b.latitude) / 4.0,
+                                              longitude: (a.longitude + cur.longitude * 2 + b.longitude) / 4.0))
+            out.append(b)
+        }
+        out.append(pts[pts.count - 1])
+        return out
     }
 
     /// 方位角（0° = 正北，顺时针）
