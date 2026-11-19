@@ -2162,8 +2162,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 走 0.9m/s → 117spm；跑 2.6m/s → 168spm×0.93m ✓。悦跑圈反推步幅 = GPS距离÷步数 = 真实。
     var plannedSpeedMps: Double = 1.4          // 开始前由视图按速度区间中值设定
     private var speedEma: Double = 0.0
-    private var lastLinkAt: Date = .distantPast
-    private var lastLinkCadence: Int = 0
+    // lastLinkAt / lastLinkCadence 在 v2.7.12 状态段声明（此处不重复）
 
     func syncStepLink(force: Bool = false) {
         guard stepLinkEnabled else { return }
