@@ -2316,7 +2316,7 @@ struct RouteSimSheet: View {
     
     private func startRoute() {
         // v2.7.12 步频联动：把速度区间中值交给模拟器，开跑时写入步数插件配置域（deb 零改动热切）
-        routeSimulator.plannedSpeedMps = max((speedMinKmh + speedMaxKmh) / 2 / 3.6, 0.5)
+        routeSimulator.plannedSpeedMps = max((speedMinKmh + speedMaxKmh) / 2 / 3.6, 0.95)   // 防失配：低于 3.4km/h 写给插件的步频步长组合必与 GPS 矛盾
         routeSimulator.startSimulation(altitude: 0.0)
         
         AlertKitAPI.present(

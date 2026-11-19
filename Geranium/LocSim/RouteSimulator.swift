@@ -172,6 +172,9 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var stepLinkEnabled = (UserDefaults.standard.object(forKey: "andromedaCadenceLink") as? Bool) ?? true
     private var lastLinkAt: Date = .distantPast
     private var lastLinkCadence: Int = 0
+    // v2.7.13 防检测加固：速度/航向的缓变噪声（等距点算出来的 speed/course 曲线过分平滑，本身就是机器指纹）
+    private var speedNoiseOu: Double = 0.0
+    private var courseNoiseOu: Double = 0.0
 
     // MARK: - DriftFix v2.2 速度区间（m/s）
     // 匀速轨迹一眼假。播放时速度在 [min,max] 内慢速随机游走（带回归中值的惯性），
@@ -2098,6 +2101,30 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
             vertical = reportedVertical
             emitCoord = jittered(wgsCoord, at: now)
+
+            // v2.7.13 防检测加固（老总令：防检测封号第一）——四个机器指纹的收尾：
+            // ① 速度曲线：等距点 d/dt 算出的 speed 过分平滑，真实 GPS 速度自带 ±3~8% 缓变；
+            // ② 航向：反推 course 是干净的数学值，真机有 ±2~3° 摆动；
+            // ③ 精度高频微跳：4~9m 十几秒一换仍太稳，真机每拍都在小幅随机跳；
+            // ④ 停下歇脚时精度短暂变差（人站着 GPS 漂移更大），配速慢段与精度曲线互相印证。
+            let dtN = min(max(now.timeIntervalSince(altLastAt), 0.0), 5.0)
+            let decayN = exp(-dtN / 15.0)
+            let kN = sqrt(max(0.0, 1.0 - decayN * decayN))
+            speedNoiseOu = speedNoiseOu * decayN + gaussRandom() * 1.0 * kN
+            if speed > 0.2 {
+                speed = max(0.0, speed * (1.0 + speedNoiseOu / 30.0))
+            }
+            let decayC = exp(-dtN / 6.0)
+            let kC = sqrt(max(0.0, 1.0 - decayC * decayC))
+            courseNoiseOu = courseNoiseOu * decayC + gaussRandom() * 1.5 * kC
+            if course > 0 {
+                course = (course + courseNoiseOu).truncatingRemainder(dividingBy: 360.0)
+                if course < 0 { course += 360.0 }
+            }
+            accuracy = min(max(accuracy + gaussRandom() * 0.5, 3.0), 60.0)
+            if now < strollUntil {
+                accuracy = max(accuracy, Double.random(in: 10.0...16.0))
+            }
         }
 
         // v2.7.12 海拔低频游走：真实 GPS 高程噪声 ±3~8m 就是「累计爬升」的来源（真人 30m vs 我们 2.6m）
@@ -2168,7 +2195,7 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard stepLinkEnabled else { return }
         let nowL = Date()
         if !force, nowL.timeIntervalSince(lastLinkAt) < 120.0 { return }
-        let v = speedEma > 0.15 ? speedEma : plannedSpeedMps   // 驻足/起步期按计划速度，不频繁改档
+        let v = max(speedEma > 0.15 ? speedEma : plannedSpeedMps, 0.95)   // 防失配：deb 表达域最慢 100×0.55=0.92，低于它写出的组合必与 GPS 矛盾
         var cad = min(max(90.0 + v * 30.0, 100.0), 190.0)
         var stride = min(max(v * 60.0 / cad, 0.55), 1.25)
         cad = min(max(v * 60.0 / stride, 100.0), 190.0)
