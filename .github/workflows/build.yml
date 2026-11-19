@@ -35,7 +35,7 @@ jobs:
           echo "name=$NAME ver=$VER build=$BLD"
           test "$NAME" = "自由轨迹" || { echo "构建产物应用名被构建设置覆盖，实际=$NAME"; exit 1; }
           test "$VER" = "2.7.11-freetrack" || { echo "版本号不符，实际=$VER"; exit 1; }
-          test "$BLD" = "27" || { echo "构建号不符，实际=$BLD"; exit 1; }
+          test "$BLD" = "28" || { echo "构建号不符，实际=$BLD"; exit 1; }
 
       - name: Assemble TIPA（免签 + ldid entitlements + RootHelper）
         run: |
@@ -70,11 +70,11 @@ jobs:
               "3. 任何线路都能拖到第几个点，接着往下走。",
               "4. 停止不再跳回真实位置，原地停在最后一点。",
               "5. 新增真实位置按钮，一键关闭所有模拟定位。",
-              "6. 其他功能没变，保存的线路还能接着用。",
+              "6. 修复随机画笔显示成绿色，松手续画不再断线。",
           ])
           data = {
               "version": "2.7.11-freetrack",
-              "build": 27,
+              "build": 28,
               "title": "自由轨迹 v2.7.11（停止驻留+指定点继续）",
               "changelog": changelog,
               "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.11-freetrack/Geranium-2.7.11-freetrack.tipa",
@@ -111,7 +111,7 @@ jobs:
             3. 任何线路都能拖到第几个点，接着往下走。
             4. 停止不再跳回真实位置，原地停在最后一点。
             5. 新增真实位置按钮，一键关闭所有模拟定位。
-            6. 其他功能没变，保存的线路还能接着用。
+            6. 修复随机画笔显示成绿色，松手续画不再断线。
             步数插件仍单独安装，不与本 App 打包在一起。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |

@@ -2354,7 +2354,19 @@ struct DrawMapView: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         pan.maximumNumberOfTouches = 1
         pan.minimumNumberOfTouches = 1
+        pan.isEnabled = false   // v2.7.11：画笔改由 quickPress 接管（见下），pan 留作兜底不启用
         mv.addGestureRecognizer(pan)
+
+        // v2.7.11：即时起笔。UIPanGestureRecognizer 要等手指移动几 pt 才识别成 pan，
+        // 松手再按的头 0.1~0.3 秒一个点都写不进——就是「起笔卡住没反应」的来源。
+        // 换成 0.02s 长按即触发、允许任意移动的手势，等于原始触摸流。
+        let quickPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDrawTouch(_:)))
+        quickPress.minimumPressDuration = 0.02
+        quickPress.allowableMovement = 10000
+        quickPress.numberOfTouchesRequired = 1
+        quickPress.isEnabled = false
+        mv.addGestureRecognizer(quickPress)
+        context.coordinator.quickPress = quickPress
 
         // 修改模式：长按拖动改点 / 轻点点删点
         let editPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleEditDrag(_:)))
@@ -2373,6 +2385,11 @@ struct DrawMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
+        // v2.7.11：🔴 不同步快照，Coordinator 里读到的 parent 永远是初建那一版 ——
+        // 切了橙笔后 brushMode 仍是 0，每笔都被记成固定笔，全画成绿色（老总实测翻车点）。
+        // SwiftUI 的 coordinator 不会自动更新 parent，必须在这里手动同步。
+        context.coordinator.parent = self
+        context.coordinator.quickPress?.isEnabled = drawingEnabled && !editingEnabled
         uiView.isScrollEnabled = !drawingEnabled   // 画笔=地图固定单指画线；移动=恢复滚动定位
         uiView.isZoomEnabled = !drawingEnabled     // 画笔模式禁双击/捏合缩放（防误触变成缩放地图）
         uiView.isPitchEnabled = false
@@ -2403,9 +2420,13 @@ struct DrawMapView: UIViewRepresentable {
         var lastSig: String = "-"
         var editPress: UILongPressGestureRecognizer?
         var editTap: UITapGestureRecognizer?
+        var quickPress: UILongPressGestureRecognizer?
         private var editDrag: EditDrag? = nil
         /// 每根折线对应的画笔模式（0=固定 1=随机），渲染取色用
         private var modeByOverlay: [ObjectIdentifier: Int] = [:]
+        /// v2.7.11 增量重画：每笔当前挂在地 map 上的 polyline（与 strokes 下标一一对应，count<2 的笔为 nil）
+        private var strokeOverlays: [MKPolyline?] = []
+        private var previewOverlay: MKPolyline? = nil
         init(_ parent: DrawMapView) { self.parent = parent }
 
         /// 新开一笔：笔画与模式同时入账，保证两个数组永远等长
@@ -2416,6 +2437,41 @@ struct DrawMapView: UIViewRepresentable {
             }
             while parent.strokeModes.count < parent.strokes.count - 1 { parent.strokeModes.append(0) }
             parent.strokeModes.append(parent.brushMode == 1 ? 1 : 0)
+        }
+
+        /// v2.7.11 松手再按下时：距上一笔末点很近（屏距 <24pt）且画笔模式相同 → 续写同一笔。
+        /// 线条不再出现「松手-重按」之间的断口；切过画笔（模式不同）必须开新笔，保持分区语义。
+        private func shouldContinueLastStroke(_ mv: MKMapView, at p: CGPoint) -> Bool {
+            guard let lastStroke = parent.strokes.last, let lastC = lastStroke.last else { return false }
+            let lastMode = parent.strokeModes.last ?? 0
+            guard lastMode == (parent.brushMode == 1 ? 1 : 0) else { return false }
+            let lastPt = mv.convert(lastC, toPointTo: mv)
+            let dx = lastPt.x - p.x, dy = lastPt.y - p.y
+            return (dx * dx + dy * dy).squareRoot() < 24.0
+        }
+
+        /// v2.7.11 画笔触摸（quickPress，即按即画零延迟）；handlePan 同构逻辑已废弃不用
+        @objc func handleDrawTouch(_ g: UILongPressGestureRecognizer) {
+            guard let mv = g.view as? MKMapView, parent.drawingEnabled, !parent.editingEnabled else { return }
+            let p = g.location(in: mv)
+            switch g.state {
+            case .began:
+                if !shouldContinueLastStroke(mv, at: p) {
+                    if parent.strokes.last?.isEmpty != true { appendEmptyStroke() }
+                }
+                parent.strokes[parent.strokes.count - 1].append(mv.convert(p, toCoordinateFrom: mv))
+            case .changed:
+                let c = mv.convert(p, toCoordinateFrom: mv)
+                if let lastC = parent.strokes.last?.last {
+                    let d = CLLocation(latitude: lastC.latitude, longitude: lastC.longitude)
+                        .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude))
+                    if d < 8 { return }   // 8m 采样节流
+                }
+                parent.strokes[parent.strokes.count - 1].append(c)
+            default:
+                break
+            }
+            syncModeCount()
         }
 
         /// 笔画被删/被并时，把模式数组对齐（多余的直接截掉）
@@ -2532,26 +2588,55 @@ struct DrawMapView: UIViewRepresentable {
         }
 
         func syncOverlay(_ mv: MKMapView, strokes: [[CLLocationCoordinate2D]], modes: [Int], preview: [CLLocationCoordinate2D]?) {
-            for o in mv.overlays where o is MKPolyline { mv.removeOverlay(o) }
-            modeByOverlay.removeAll()
-            for (i, s) in strokes.enumerated() where s.count >= 2 {
-                let poly = MKPolyline(coordinates: s, count: s.count)
-                modeByOverlay[ObjectIdentifier(poly)] = (i < modes.count && modes[i] == 1) ? 1 : 0
-                mv.addOverlay(poly, level: .aboveRoads)
+            // v2.7.11 增量重画：画线时每写一个点 SwiftUI 都会调到这里。原来全量
+            // remove+add 所有笔画，笔画越多每帧越重——松手接笔时那 0.x 秒卡顿就是它。
+            // 现在：编辑模式（拖点改坐标，点数不变）仍全量；画线模式只重建点数变了的笔。
+            let needsFull = parent.editingEnabled || strokeOverlays.count != strokes.count
+            if needsFull {
+                for o in mv.overlays where o is MKPolyline { mv.removeOverlay(o) }
+                modeByOverlay.removeAll()
+                strokeOverlays.removeAll()
+                previewOverlay = nil   // 全量已把预览线一并移走，引用必须同步作废，否则点数相同时不再重建、预览线消失
             }
+            for (i, s) in strokes.enumerated() {
+                let old = i < strokeOverlays.count ? strokeOverlays[i] : nil
+                if !needsFull, let op = old, op.pointCount == s.count { continue }   // 这一笔没动
+                if let op = old { mv.removeOverlay(op) }
+                var newPoly: MKPolyline? = nil
+                if s.count >= 2 {
+                    let poly = MKPolyline(coordinates: s, count: s.count)
+                    modeByOverlay[ObjectIdentifier(poly)] = (i < modes.count && modes[i] == 1) ? 1 : 0
+                    mv.addOverlay(poly, level: .aboveRoads)
+                    newPoly = poly
+                }
+                if i < strokeOverlays.count { strokeOverlays[i] = newPoly } else { strokeOverlays.append(newPoly) }
+            }
+            if strokeOverlays.count > strokes.count { strokeOverlays.removeLast(strokeOverlays.count - strokes.count) }
+
+            // 预览线独立管理（identity 判定，不再靠 overlays.last 猜）
             if let pv = preview, pv.count >= 2 {
-                let poly = MKPolyline(coordinates: pv, count: pv.count)
-                mv.addOverlay(poly, level: .aboveRoads)
+                if let pp = previewOverlay {
+                    if pp.pointCount != pv.count {
+                        mv.removeOverlay(pp)
+                        let poly = MKPolyline(coordinates: pv, count: pv.count)
+                        mv.addOverlay(poly, level: .aboveRoads)
+                        previewOverlay = poly
+                    }
+                } else {
+                    let poly = MKPolyline(coordinates: pv, count: pv.count)
+                    mv.addOverlay(poly, level: .aboveRoads)
+                    previewOverlay = poly
+                }
+            } else if let pp = previewOverlay {
+                mv.removeOverlay(pp)
+                previewOverlay = nil
             }
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
-                let isPreview = parent.previewPoints != nil &&
-                    abs(poly.pointCount - (parent.previewPoints?.count ?? 0)) <= 1 &&
-                    mapView.overlays.last === poly
-                if isPreview {
+                if overlay === previewOverlay {
                     r.strokeColor = .systemBlue
                     r.lineWidth = 4
                     r.alpha = 0.95
