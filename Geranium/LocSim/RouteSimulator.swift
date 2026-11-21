@@ -914,7 +914,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 老总原话：「更换画笔，画笔样式或者颜色不同，来指定某段区域固定，不随机。」
     /// 只有随机笔才产生偏移，固定笔的点原样进入注入序列——分区控制，不做全局抖动。
     func buildFromDrawnStrokes(_ strokes: [[CLLocationCoordinate2D]], modes: [Int],
-                               minSpeed: Double, maxSpeed: Double) -> Bool {
+                               minSpeed: Double, maxSpeed: Double,
+                               loops: Int = 1, roundTrip: Bool = false) -> Bool {
         var flat: [CLLocationCoordinate2D] = []
         var wildFlags: [Bool] = []
         for (i, s) in strokes.enumerated() {
@@ -940,11 +941,32 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         guard pts.count >= 2 else { return false }
         let base = pts
-        let resampled = interpolateVariableRoute(coords: base, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
-        let injected = applyRandomBrushSway(resampled, reference: base, wild: flags)
+
+        // v2.7.14 往返 / 重复：往返回程走原线（尾点衔接不重复）；重复=每轮去掉首点接续，
+        // 不往返时轮间接缝是一段直线走回起点（1Hz 重采样会匀速走，不瞬移）。
+        // 拼接后的序列整体做 1Hz 重采样与随机笔摆动 —— 回程经过同一坐标时时间不同，
+        // OU 游走状态不同，天然不会出现像素级重线（防检测）。
+        var seq = base
+        var seqFlags = flags
+        if roundTrip {
+            seq += Array(base.dropLast().reversed())
+            seqFlags += Array(flags.dropLast().reversed())
+        }
+        let n = max(1, min(loops, 20))
+        var full = seq
+        var fullFlags = seqFlags
+        if n > 1 {
+            for _ in 1..<n {
+                full += Array(seq.dropFirst())
+                fullFlags += Array(seqFlags.dropFirst())
+            }
+        }
+
+        let resampled = interpolateVariableRoute(coords: full, minSpeed: minSpeed, maxSpeed: maxSpeed, interval: updateInterval)
+        let injected = applyRandomBrushSway(resampled, reference: full, wild: fullFlags)
 
         polylineIsWGS = false
-        routePoints = injected.count >= 2 ? injected : base
+        routePoints = injected.count >= 2 ? injected : full
         totalPoints = routePoints.count
         currentPointIndex = 0
         progress = 0.0
@@ -955,8 +977,8 @@ class RouteSimulator: NSObject, ObservableObject, CLLocationManagerDelegate {
         allRoutePolylines = []
         routePolyline = MKPolyline(coordinates: base, count: base.count)
         var totalMeters: Double = 0
-        for i in 1..<base.count {
-            totalMeters += distanceBetween(base[i - 1], base[i])
+        for i in 1..<full.count {
+            totalMeters += distanceBetween(full[i - 1], full[i])
         }
         let eff = max((minSpeed + maxSpeed) / 2, 0.2)
         let secs = totalMeters / eff

@@ -1,4 +1,4 @@
-name: "自由轨迹 TIPA v2.7.13"
+name: "自由轨迹 TIPA v2.7.14"
 
 on:
   push:
@@ -34,8 +34,8 @@ jobs:
           BLD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST")
           echo "name=$NAME ver=$VER build=$BLD"
           test "$NAME" = "自由轨迹" || { echo "构建产物应用名被构建设置覆盖，实际=$NAME"; exit 1; }
-          test "$VER" = "2.7.13-freetrack" || { echo "版本号不符，实际=$VER"; exit 1; }
-          test "$BLD" = "30" || { echo "构建号不符，实际=$BLD"; exit 1; }
+          test "$VER" = "2.7.14-freetrack" || { echo "版本号不符，实际=$VER"; exit 1; }
+          test "$BLD" = "31" || { echo "构建号不符，实际=$BLD"; exit 1; }
 
       - name: Assemble TIPA（免签 + ldid entitlements + RootHelper）
         run: |
@@ -56,31 +56,31 @@ jobs:
           cp -R Geranium.app Payload/Geranium.app
           zip -qry Geranium.tipa Payload
           cd ..
-          cp build/Geranium.tipa "Geranium-2.7.13-freetrack.tipa"
-          shasum -a 256 "Geranium-2.7.13-freetrack.tipa" | tee sha256.txt
-          ls -la "Geranium-2.7.13-freetrack.tipa"
+          cp build/Geranium.tipa "Geranium-2.7.14-freetrack.tipa"
+          shasum -a 256 "Geranium-2.7.14-freetrack.tipa" | tee sha256.txt
+          ls -la "Geranium-2.7.14-freetrack.tipa"
 
       - name: Generate latest.json（云端更新检测元数据）
         run: |
           python3 - <<'PY'
           import io, json
           changelog = "\n".join([
-              "1. 定位速度加了细微抖动，更像真机。",
-              "2. 航向轻微摆动，不再完美顺滑。",
-              "3. 精度数字每秒微跳，贴真机表现。",
-              "4. 停下歇脚时精度变差，跟真机一样。",
-              "5. 走太慢时步数联动守住合理范围。",
+              "1. 手画线路能走完原路返回，有开关。",
+              "2. 手画线路能重复跑，最多二十遍。",
+              "3. 不往返时每轮直线走回起点接着跑。",
+              "4. 往返回程自带偏差，不会和去程重线。",
+              "5. 双画笔和指定点继续都照旧能用。",
               "6. 老线路和设置都保留，装完接着用。",
           ])
           data = {
-              "version": "2.7.13-freetrack",
-              "build": 30,
-              "title": "自由轨迹 v2.7.13（停止驻留+指定点继续）",
+              "version": "2.7.14-freetrack",
+              "build": 31,
+              "title": "自由轨迹 v2.7.14（手画往返+重复）停止驻留+指定点继续）",
               "changelog": changelog,
-              "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.13-freetrack/Geranium-2.7.13-freetrack.tipa",
+              "tipa_url": "https://github.com/liushQAQ/Andromeda/releases/download/v2.7.14-freetrack/Geranium-2.7.14-freetrack.tipa",
               "tipa_mirrors": [
-                  "https://ghfast.top/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.13-freetrack/Geranium-2.7.13-freetrack.tipa",
-                  "https://gh-proxy.com/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.13-freetrack/Geranium-2.7.13-freetrack.tipa",
+                  "https://ghfast.top/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.14-freetrack/Geranium-2.7.14-freetrack.tipa",
+                  "https://gh-proxy.com/https://github.com/liushQAQ/Andromeda/releases/download/v2.7.14-freetrack/Geranium-2.7.14-freetrack.tipa",
               ],
               "min_ios": "15.0",
           }
@@ -94,7 +94,7 @@ jobs:
         with:
           name: FreeTrack-TIPA
           path: |
-            Geranium-2.7.13-freetrack.tipa
+            Geranium-2.7.14-freetrack.tipa
             latest.json
             sha256.txt
           if-no-files-found: error
@@ -102,20 +102,20 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.7.13-freetrack
-          name: "自由轨迹 2.7.13（防检测拟真加固）"
+          tag_name: v2.7.14-freetrack
+          name: "自由轨迹 2.7.14（手画往返+重复）防检测拟真加固）"
           body: |
             基于上游 Son3ra1n/Andromeda 2.5.2（GPL-3.0）。
-            1. 定位速度加了细微抖动，更像真机。
-            2. 航向轻微摆动，不再完美顺滑。
-            3. 精度数字每秒微跳，贴真机表现。
-            4. 停下歇脚时精度变差，跟真机一样。
-            5. 走太慢时步数联动守住合理范围。
+            1. 手画线路能走完原路返回，有开关。
+            2. 手画线路能重复跑，最多二十遍。
+            3. 不往返时每轮直线走回起点接着跑。
+            4. 往返回程自带偏差，不会和去程重线。
+            5. 双画笔和指定点继续都照旧能用。
             6. 老线路和设置都保留，装完接着用。
             步数插件仍单独安装，不与本 App 打包在一起。
             RootHelper 使用官方 2.5.2 发布包二进制（无改动）。
           files: |
-            Geranium-2.7.13-freetrack.tipa
+            Geranium-2.7.14-freetrack.tipa
             latest.json
             sha256.txt
         env:

@@ -52,6 +52,9 @@ struct RouteSimSheet: View {
     // v2.7.11：手画随机抖动幅度（橙笔摆动强度，0=不抖）；从指定点继续的滑杆位置
     @AppStorage("andromedaDrawSway") private var drawSwayMeters: Double = 2.2
     @State private var resumeIdx: Int = 0
+    // v2.7.14：手画线路 往返 / 重复次数
+    @AppStorage("andromedaDrawRoundTrip") private var drawRoundTrip: Bool = false
+    @AppStorage("andromedaDrawLoops") private var drawLoops: Int = 1
     @AppStorage("andromedaSnapLong") private var snapLongOn: Bool = true
     @AppStorage("andromedaFillSpacing") private var fillSpacing: Double = 200
     @State private var isSearchingStart: Bool = false
@@ -551,6 +554,28 @@ struct RouteSimSheet: View {
             .padding(.horizontal)
             Text("点「生成路线」进入手画地图：先用「移动地图」定位，切「画笔绘制」按住拖动画线（可分多笔，单指画线/双指缩放）。画的时候可以换画笔：绿笔画「固定」段，走起来和画的一分不差；橙笔画「随机」段，只在画的线附近小幅摆动，转成点序列后还能参与顺序打乱。画完可切「修改线路」长按拖动改点、轻点删点，不用整条重画。笔画会自动保存，关掉再进来能接着改。")
                 .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            // v2.7.14 往返 / 重复线路
+            HStack(spacing: 12) {
+                Toggle("走完原路返回", isOn: $drawRoundTrip)
+                    .font(.caption)
+                Spacer()
+                HStack(spacing: 6) {
+                    Text("重复")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Stepper("×\(drawLoops)", value: $drawLoops, in: 1...20)
+                        .font(.caption)
+                        .fixedSize()
+                }
+            }
+            .padding(.horizontal)
+            Text(drawRoundTrip
+                 ? "往返开：走到终点原路返回起点，来回交替；回程自带偏差不会和去程重线。"
+                 : "往返关：每轮走完直线走回起点再跑下一轮。重复 ×1 就是只走一遍。")
+                .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
         }
@@ -1448,7 +1473,9 @@ struct RouteSimSheet: View {
         let minMps = speedMinKmh / 3.6
         let maxMps = speedMaxKmh / 3.6
         // v2.7.9: 固定笔 → 坐标原样；随机笔 → 沿画线最多偏 2.2m（分区生效，互不影响）
-        if routeSimulator.buildFromDrawnStrokes(strokes, modes: modes, minSpeed: minMps, maxSpeed: maxMps) {
+        // v2.7.14: 往返 / 循环次数按卡片开关拼接
+        if routeSimulator.buildFromDrawnStrokes(strokes, modes: modes, minSpeed: minMps, maxSpeed: maxMps,
+                                                loops: drawLoops, roundTrip: drawRoundTrip) {
             // 起终点对齐到画线首末点：卡片显示与实际走的完全一致
             if let f = src.first, let l = src.last {
                 routeSimulator.setDrawnEndpoints(start: f, end: l)
